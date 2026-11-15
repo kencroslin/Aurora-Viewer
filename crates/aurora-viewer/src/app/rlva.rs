@@ -583,6 +583,7 @@ impl App {
                 owner_id: self.world.agent_id,
                 source_type: aurora_net::ChatSourceType::Object,
                 chat_type: aurora_net::ChatType::OwnerSay,
+                region: None,
                 position: Vec3::ZERO,
                 message: "@jump=n,version=123".into(),
             }));
@@ -624,6 +625,7 @@ impl App {
             owner_id: self.world.agent_id,
             source_type: aurora_net::ChatSourceType::Object,
             chat_type: aurora_net::ChatType::OwnerSay,
+            region: None,
             position: Vec3::ZERO,
             message,
         }));

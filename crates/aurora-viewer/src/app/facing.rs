@@ -22,6 +22,7 @@ impl App {
             self.autopilot_stop_pending = true;
             self.sync_run();
         }
+        self.selection_turn = None;
         self.world.facing.stop();
         if continuous {
             self.world.facing.start(id);
