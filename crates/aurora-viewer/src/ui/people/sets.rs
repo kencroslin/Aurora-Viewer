@@ -42,8 +42,6 @@ fn list(ui: &mut egui::Ui, c: &mut Ctx, data: &super::RadarData, st: &mut People
     let set = choice(c);
     let mutable = !ContactSets::is_internal(&set);
     let world = c.world;
-    let friends: Vec<Uuid> = world.social.friends.iter().map(|f| f.id).collect();
-    let is_friend = |id: &Uuid| world.social.is_friend(id);
     set_pills(ui, c, &set);
     ui.add_space(6.0);
     // search, and "Add" (residents chosen in the picker)
@@ -67,38 +65,43 @@ fn list(ui: &mut egui::Ui, c: &mut Ctx, data: &super::RadarData, st: &mut People
         widgets::clearable_search_box(ui, p, &mut st.filter, aurora_i18n::tr!("ui-contacts-filter-people"), w);
     });
     ui.add_space(7.0);
-    let names = &world.social.avatar_names;
-    let o = names.options;
-    let name_of = |id: &Uuid| {
-        names
-            .get(id)
-            .map(|n| n.complete(&o))
-            .or_else(|| world.social.names.get(id).cloned())
-            .unwrap_or_else(|| "â€¦".into())
-    };
-    let online = |id: &Uuid| world.social.friends.iter().any(|f| f.id == *id && f.online);
-    let filter = st.filter.trim().to_lowercase();
-    let mut members = world.contact_sets.members(&set, &friends, is_friend);
-    members.retain(|id| super::matches_name(world, id, &name_of(id), &filter));
-    // FSPanelContactSets::updateAvatarListSorting
-    if world.contact_sets.sorts_by_online(&set) {
-        members.sort_by_cached_key(|id| (!online(id), crate::natural_order::key(&name_of(id))));
-    } else {
-        members.sort_by_cached_key(|id| crate::natural_order::key(&name_of(id)));
+    let mut cache = std::mem::take(&mut st.set_cache);
+    cache.update(world, &set, &st.filter);
+    if cache.known < cache.total {
+        ui.label(
+            egui::RichText::new(aurora_i18n::tr!(
+                "contacts-names-loading",
+                known = aurora_i18n::integer(cache.known as i64),
+                total = aurora_i18n::integer(cache.total as i64)
+            ))
+            .small()
+            .color(p.muted),
+        );
+        ui.add_space(4.0);
     }
-    st.sel.retain(|id| members.contains(id));
-    let area = egui::ScrollArea::vertical()
+    let members = &cache.members;
+    st.sel.retain(|id| cache.visible.contains(id));
+    let target = st
+        .anchor
+        .filter(|id| st.sel.contains(id))
+        .or_else(|| st.sel.last().copied())
+        .or(st.sheet);
+    let selected_row = target.and_then(|target| members.iter().position(|id| *id == target));
+    ui.spacing_mut().item_spacing.y = RICH_GAP;
+    if members.is_empty() {
+        rows::empty(ui, p, aurora_i18n::tr!("ui-contacts-this-contact-set-is-empty"));
+    }
+    let area = widgets::search_scroll_to_row(ui, egui::ScrollArea::vertical(), selected_row, RICH_H)
         .id_salt("people-sets-rows")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_rows(ui, RICH_H, members.len(), |ui, range| {
             ui.spacing_mut().item_spacing.y = RICH_GAP;
-            if members.is_empty() {
-                rows::empty(ui, p, aurora_i18n::tr!("ui-contacts-this-contact-set-is-empty"));
-            }
-            for id in &members {
-                row(ui, c, data, st, &set, *id, &rows::display_name(world, id), &members);
+            for index in range {
+                let id = members[index];
+                row(ui, c, data, st, &set, id, &rows::display_name(world, &id), members);
             }
         });
+    st.set_cache = cache;
     let drop = ui.interact(area.inner_rect, ui.scope_id().with("contact_set_drop"), Sense::hover());
     crate::ui::contacts::drag::set_target(&drop, &set);
 }
@@ -110,7 +113,12 @@ fn set_pills(ui: &mut egui::Ui, c: &mut Ctx, set: &str) {
     let world = c.world;
     let names = world.contact_sets.set_names();
     let friends: Vec<Uuid> = world.social.friends.iter().map(|f| f.id).collect();
-    let count = |s: &str| world.contact_sets.members(s, &friends, |id| world.social.is_friend(id)).len();
+    let count = |s: &str| {
+        world.contact_sets.set(s).map_or_else(
+            || world.contact_sets.members(s, &friends, |id| world.social.is_friend(id)).len(),
+            |set| set.friends.len(),
+        )
+    };
     let new_w = widgets::filter_pill_width(ui, "plus", aurora_i18n::tr!("people-sets-new"));
     let more_w = widgets::filter_pill_width(ui, "", "+00");
     let mut chosen: Option<String> = None;
@@ -163,6 +171,15 @@ fn set_pills(ui: &mut egui::Ui, c: &mut Ctx, set: &str) {
                 aurora_i18n::tr!("contacts-import-hint"),
             ) {
                 contacts.import_contact_sets(ui.ctx(), world.agent_id);
+            }
+            if menu::item_if(
+                ui,
+                p,
+                "file-export",
+                aurora_i18n::tr!("contacts-share-export"),
+                contacts.can_export_contact_set(world, set),
+            ) {
+                contacts.export_contact_set(ui.ctx(), world, set);
             }
             menu::separator(ui, p);
             if menu::item_if(
@@ -242,6 +259,7 @@ fn row(ui: &mut egui::Ui, c: &mut Ctx, data: &super::RadarData, st: &mut PeopleU
         rows::person_menu(&resp, p, world, &st.sel, id);
         return;
     }
+    world.social.avatar_names.want_visible(&id);
     if !data.pics.contains_key(&id) {
         st.want_pic(id, ui.input(|i| i.time));
     }
@@ -364,6 +382,76 @@ fn hover_actions(ui: &mut egui::Ui, c: &mut Ctx, st: &mut PeopleUi, set: &str, i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn contact_large_modern_list_filters_last_member_and_reveals_it_after_clearing_search() {
+        let mut world = crate::world::World::new(std::sync::Arc::new(crate::scene::avatar::AvatarLibrary::load()));
+        let ids: Vec<_> = (1..=5000).map(Uuid::from_u128).collect();
+        world.contact_sets.add_set("Large");
+        world.contact_sets.add_to_set(&ids, "Large", |_| false);
+        for (n, id) in ids.iter().enumerate() {
+            world.social.names.insert(*id, format!("Member {}", n + 1));
+        }
+        let p = crate::theme::Theme::default().palette();
+        let mut contacts = crate::ui::contacts::ContactsUi::default();
+        let mut friends = super::super::FriendsSettings::default();
+        let mut st = PeopleUi::default();
+        let mut actions = Vec::new();
+        let radar = crate::world::radar::Radar::default();
+        let mut settings = super::super::RadarSettings::default();
+        let (voice, pics) = (std::collections::HashMap::new(), std::collections::HashMap::new());
+        let data = super::super::RadarData {
+            radar: &radar,
+            settings: &mut settings,
+            voice: &voice,
+            draw_distance: 64.0,
+            second_life: true,
+            now: 0.0,
+            pics: &pics,
+        };
+        let mut frames = crate::ui::widgets::elide_tests::Frames::new();
+        let mut draw = |ui: &mut egui::Ui, st: &mut PeopleUi, reveal: bool| {
+            ui.set_width(500.0);
+            if reveal {
+                let key = egui::Id::unique("search_selection_reveal").with(ui.layer_id());
+                let frame = ui.ctx().cumulative_frame_nr();
+                ui.ctx().data_mut(|data| data.insert_temp(key, frame));
+            }
+            let mut c = Ctx {
+                p: &p,
+                world: &world,
+                contacts: &mut contacts,
+                friends: &mut friends,
+                images: &pics,
+                actions: &mut actions,
+                embedded_contacts: false,
+                contact_sheet_on_click: false,
+            };
+            list(ui, &mut c, &data, st, false);
+        };
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            texts = frames.run(Vec::new(), |ui| draw(ui, &mut st, false));
+        }
+        let drawn = texts.iter().filter(|t| t.source.starts_with("Member ")).count();
+        assert!(drawn > 0 && drawn < 50, "only a viewport of members is painted");
+        st.filter = "member 5000".into();
+        for _ in 0..3 {
+            texts = frames.run(Vec::new(), |ui| draw(ui, &mut st, false));
+        }
+        assert!(texts.iter().any(|t| t.source == "Member 5000"));
+        st.sel = vec![ids[4999]];
+        st.anchor = Some(ids[4999]);
+        st.filter.clear();
+        for _ in 0..3 {
+            texts = frames.run(Vec::new(), |ui| draw(ui, &mut st, true));
+        }
+        assert!(
+            texts.iter().any(|t| t.source == "Member 5000"),
+            "clearing search reveals an offscreen selection"
+        );
+        assert_eq!(st.sel, vec![ids[4999]]);
+    }
 
     /// Modern rows always request their picture and use only explicit
     /// UI-name attributes, resolved by set priority, rather than the old

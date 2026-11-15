@@ -285,7 +285,7 @@ impl App {
                 || !self.world.movement_complete
                 || !self.focused
                 || self.camera.free().is_some()
-                || self.autopilot.is_some(),
+                || self.autopilot.as_ref().is_some_and(|ap| ap.controls_active()),
             locked: self.settings.bridge.get(&self.world.agent_id).is_some_and(|prefs| prefs.enabled)
                 && self.bridge_runtime.locked()
                 && !(self.input.forward

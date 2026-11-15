@@ -227,6 +227,7 @@ enum Edit {
 /// (is_running_function in commands.xml), given by the app each frame.
 #[derive(Clone, Copy, Default)]
 pub struct Shown {
+    pub keep_facing: bool,
     /// Avatar.IsMyProfileOpen.
     pub profile: bool,
     /// Floater.IsOpen build.
@@ -245,6 +246,7 @@ impl Shown {
     /// Whether the button of `command` lights, when it is one of these.
     pub fn lit(&self, command: &str) -> Option<bool> {
         Some(match command {
+            "keep_facing_avatar" => self.keep_facing,
             "profile" => self.profile,
             "build" => self.build,
             "poser" => self.poser,

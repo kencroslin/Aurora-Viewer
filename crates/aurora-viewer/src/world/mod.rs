@@ -35,6 +35,7 @@ pub mod env_select;
 pub mod estate;
 pub mod experience_log;
 pub mod experiences;
+pub mod facing;
 pub mod favorites;
 pub mod flying_at_exit;
 mod friend_join;
@@ -420,6 +421,7 @@ pub struct World {
     pub agent: AgentState,
     /// Session-only UI readback of the active avatar follow.
     pub following_avatar: Option<Uuid>,
+    pub facing: facing::State,
     /// The controls our scripts took (llTakeControls): who gets the left
     /// button's clicks (app/script_clicks.rs).
     pub script_controls: aurora_net::script_controls::ScriptControls,
@@ -858,6 +860,7 @@ impl World {
             sun: None,
             agent: AgentState::default(),
             following_avatar: None,
+            facing: Default::default(),
             script_controls: Default::default(),
             coarse: HashMap::new(),
             region_left: None,

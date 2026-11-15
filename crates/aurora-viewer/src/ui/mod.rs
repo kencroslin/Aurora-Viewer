@@ -46,6 +46,7 @@ pub mod environment;
 pub mod exit;
 pub mod experience_profile;
 pub mod experiences;
+pub mod facing;
 pub mod find_shortcut;
 mod floating_text;
 pub mod fly_override;

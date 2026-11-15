@@ -856,3 +856,194 @@ fn the_group_picker_keeps_its_size() {
         |st, ctx, p| show_group(st, &world, ctx, p),
     );
 }
+
+/// Exercise the rendered table, its keyboard focus and the actual Add menu.
+#[test]
+fn group_contacts_rendered_list_command_a_sends_every_member_to_the_chosen_set() {
+    for classic in [false, true] {
+        check_group_contacts_rendered_list(classic, false, false, false);
+    }
+}
+
+#[test]
+fn group_contacts_window_keeps_command_a_focus_between_frames() {
+    check_group_contacts_rendered_list(false, true, false, false);
+}
+
+#[test]
+fn group_contacts_management_checkbox_hands_command_a_to_the_list() {
+    check_group_contacts_rendered_list(false, true, true, false);
+}
+
+#[test]
+fn group_contacts_select_all_checkbox_works_without_a_shortcut() {
+    check_group_contacts_rendered_list(false, true, true, true);
+    check_group_contacts_rendered_list(true, false, false, true);
+}
+
+fn check_group_contacts_rendered_list(classic: bool, window: bool, admin: bool, use_control: bool) {
+    use crate::ui::context::{self, CtxAction};
+    let powers = if admin {
+        MEMBER | powers::MEMBER_EJECT | powers::ROLE_ASSIGN_MEMBER
+    } else {
+        MEMBER
+    };
+    let mut world = world(true, powers);
+    world.contact_sets.add_set("Selected group members");
+    let mut st = opened(&mut world);
+    st.tab = Tab::Members;
+    let ctx = egui::Context::default();
+    crate::theme::Theme::default().apply(&ctx, 1.0);
+    let p = crate::theme::Theme::default().palette();
+    let images = HashMap::new();
+    let pics = HashMap::new();
+    let mut emoji = crate::ui::emoji::Emoji::load();
+    let (mut names, mut wanted, mut groups) = (HashSet::new(), HashSet::new(), HashSet::new());
+    let env = Env {
+        avatar_pics: &pics,
+        classic: false,
+        now: 0.0,
+        group_calls: false,
+    };
+    let v = view::View::of(&world, DEMO_GROUP1);
+    let expected: std::collections::BTreeSet<Uuid> = v.data.expect("members").members.keys().copied().collect();
+    let (first_id, first) = members::rows(
+        &v,
+        &|id| world.social.display_name_of(id),
+        "",
+        members::Show::All,
+        members::Sort::Status,
+        false,
+    )[0]
+    .clone();
+    let mut draw = |events: Vec<egui::Event>| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(1400.0, 1000.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                let mut c = Ctx {
+                    p: &p,
+                    world: &world,
+                    images: &images,
+                    emoji: &mut emoji,
+                    want_names: &mut names,
+                    wanted_images: &mut wanted,
+                    want_groups: &mut groups,
+                };
+                if window {
+                    st.show(ui.ctx(), &mut c, &env);
+                } else if classic {
+                    members::classic_list(&mut st, ui, &mut c, &v);
+                } else {
+                    members::show(&mut st, ui, &mut c, &env, &v, &mut Vec::new());
+                }
+                ui.ctx()
+                    .data_mut(|d| d.insert_temp(egui::Id::unique("group_contacts_test_selection"), st.members.selected));
+            },
+        );
+        output.textures_delta.clear();
+        output.shapes
+    };
+    fn text_rect_below(shapes: &[egui::epaint::ClippedShape], text: &str, min_y: f32) -> Rect {
+        fn find(shape: &Shape, text: &str, min_y: f32) -> Option<Rect> {
+            match shape {
+                Shape::Text(t) if t.galley.text() == text && t.pos.y >= min_y => Some(Rect::from_min_size(t.pos, t.galley.size())),
+                Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, text, min_y)),
+                _ => None,
+            }
+        }
+        shapes
+            .iter()
+            .find_map(|s| find(&s.shape, text, min_y))
+            .unwrap_or_else(|| panic!("missing UI text below {min_y}: {text}"))
+    }
+    fn text_center(shapes: &[egui::epaint::ClippedShape], text: &str) -> Pos2 {
+        text_rect_below(shapes, text, f32::NEG_INFINITY).center()
+    }
+    let pointer = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    draw(vec![]);
+    let shapes = draw(vec![]);
+    // Unresolved names also appear in the window's founder link: hit the
+    // member table below its column header, never that unrelated link.
+    let min_y = if classic {
+        0.0
+    } else {
+        text_center(&shapes, &aurora_i18n::tr!("ui-group-profile-col-member").to_uppercase()).y
+    };
+    let name = text_rect_below(&shapes, &first, min_y);
+    let mut row = name.center();
+    if admin {
+        let tick = ctx
+            .read_response(egui::Id::unique(("group_member_tick", DEMO_GROUP1, first_id)))
+            .expect("management checkbox");
+        row = tick.rect.center();
+        if let Some(transform) = ctx.layer_transform_to_global(tick.layer_id) {
+            row = transform * row;
+        }
+    }
+    draw(vec![egui::Event::PointerMoved(row), pointer(row, true)]);
+    draw(vec![pointer(row, false)]);
+    assert_eq!(
+        ctx.data(|d| d.get_temp::<Option<Uuid>>(egui::Id::unique("group_contacts_test_selection")))
+            .flatten(),
+        Some(first_id),
+        "the click must hit a member row, not the founder link"
+    );
+    for _ in 0..60 {
+        draw(vec![]);
+    }
+    let shapes = if use_control {
+        let shapes = draw(vec![]);
+        let select = text_center(&shapes, aurora_i18n::tr!("group-contacts-select-all"));
+        draw(vec![egui::Event::PointerMoved(select), pointer(select, true)]);
+        draw(vec![pointer(select, false)])
+    } else {
+        draw(vec![egui::Event::ModifiersChanged(egui::Modifiers {
+            command: true,
+            mac_cmd: true,
+            ..Default::default()
+        })]);
+        draw(vec![egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                command: true,
+                mac_cmd: true,
+                ..Default::default()
+            },
+        }])
+    };
+    let count = aurora_i18n::tr!("ui-group-admin-selected", count = expected.len() as i64);
+    text_center(&shapes, &count);
+    let add = text_center(&shapes, aurora_i18n::tr!("ui-context-add-to-contact-set"));
+    draw(vec![egui::Event::PointerMoved(add), pointer(add, true)]);
+    draw(vec![pointer(add, false)]);
+    let shapes = draw(vec![]);
+    let set = text_center(&shapes, "Selected group members");
+    draw(vec![egui::Event::PointerMoved(set), pointer(set, true)]);
+    draw(vec![pointer(set, false)]);
+    let requests = context::take_requests(&ctx);
+    let ids = requests
+        .iter()
+        .find_map(|action| match action {
+            CtxAction::ContactSet(crate::ui::contacts::SetEdit::Add { set, ids }) if set == "Selected group members" => Some(ids),
+            _ => None,
+        })
+        .expect("bulk add request");
+    assert_eq!(ids.iter().copied().collect::<std::collections::BTreeSet<_>>(), expected);
+    assert_eq!(
+        st.members.checked.len(),
+        usize::from(admin),
+        "contact selection never expands management ticks"
+    );
+}

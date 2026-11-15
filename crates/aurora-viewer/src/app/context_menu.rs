@@ -252,6 +252,8 @@ impl App {
                 f.avatar_travel = !self.native_anchor.blocks_walk(w.agent.seated, w.agent.ground_sit)
                     && crate::autopilot::avatar_position(w, *id).is_some();
                 f.following = w.following_avatar == Some(*id);
+                f.avatar_face = crate::world::facing::target_yaw(w, *id).is_some() && !self.camera.mouselook();
+                f.facing = w.facing.target == Some(*id);
                 f.complexity = w
                     .objects
                     .index_of_uuid(id)
@@ -609,6 +611,9 @@ impl App {
                 let object = id.and_then(|id| self.zoom_focus_object(&id));
                 self.camera.zoom_to(p, object, &mut self.world.agent, &self.settings.camera);
             }
+            CtxAction::FaceAvatar(id) => self.face_avatar(id, false),
+            CtxAction::KeepFacingAvatar(id) => self.face_avatar(id, true),
+            CtxAction::StopFacing => self.world.facing.stop(),
             CtxAction::GoToAvatar(id) => self.travel_to_avatar(id, false),
             CtxAction::FollowAvatar(id) => self.travel_to_avatar(id, true),
             CtxAction::StopFollowing => self.stop_autopilot(true),

@@ -1,6 +1,9 @@
 //! Live controls for the current follow (Aurora addition, issue #967).
 use super::widgets::{self, ActionKind, Floater};
-use crate::{autopilot::FollowSettings, theme::Palette};
+use crate::{
+    autopilot::{FollowMovement, FollowSettings, FollowStatus},
+    theme::Palette,
+};
 
 #[derive(Default)]
 pub struct FollowUi {
@@ -15,10 +18,12 @@ pub struct Actions {
     pub changed: bool,
     pub save: bool,
     pub stop: bool,
+    pub pause: bool,
+    pub resume: bool,
 }
 
 impl FollowUi {
-    pub fn show(&mut self, ctx: &egui::Context, p: &Palette, name: &str, recovering: bool, settings: &mut FollowSettings) -> Actions {
+    pub fn show(&mut self, ctx: &egui::Context, p: &Palette, name: &str, status: FollowStatus, settings: &mut FollowSettings) -> Actions {
         let mut actions = Actions::default();
         if !self.open {
             return actions;
@@ -29,12 +34,13 @@ impl FollowUi {
             "follow",
             aurora_i18n::tr!("follow-title"),
             egui::pos2(40.0, 160.0),
-            egui::vec2(340.0, 190.0),
+            egui::vec2(380.0, 360.0),
         )
         .fixed()
         .show(ctx, p, &mut self.open, |ui| {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
             ui.label(egui::RichText::new(name).strong());
+            ui.label(egui::RichText::new(status.label()).color(p.muted));
             ui.label(aurora_i18n::tr!("follow-distance"));
             settings.distance = settings.bounded_distance();
             ui.spacing_mut().slider_width = (ui.available_width() - 80.0).max(80.0);
@@ -44,11 +50,56 @@ impl FollowUi {
                     .suffix(" m"),
             );
             actions.changed |= slider.changed();
+            let mut presets = Vec::new();
+            ui.horizontal_wrapped(|ui| {
+                for (label, distance) in [
+                    (aurora_i18n::tr!("follow-preset-close"), 1.0),
+                    (aurora_i18n::tr!("follow-preset-companion"), 3.0),
+                    (aurora_i18n::tr!("follow-preset-trail"), 6.0),
+                ] {
+                    let button = widgets::flat_button(ui, p, label);
+                    if button.clicked() {
+                        settings.distance = distance;
+                        actions.changed = true;
+                    }
+                    presets.push(button.rect);
+                }
+            });
+            ui.label(aurora_i18n::tr!("follow-movement"));
+            let movement = egui::ComboBox::from_id_salt("follow_movement")
+                .selected_text(settings.movement.label())
+                .show_ui(ui, |ui| {
+                    for mode in FollowMovement::ALL {
+                        actions.changed |= ui.selectable_value(&mut settings.movement, mode, mode.label()).changed();
+                    }
+                });
+            movement.response.clone().on_hover_text(aurora_i18n::tr!("follow-mode-tip"));
             let toggle = widgets::switch_labeled(ui, p, &mut settings.teleport_if_stuck, aurora_i18n::tr!("follow-teleport-if-stuck"))
                 .on_hover_text(aurora_i18n::tr!("follow-teleport-if-stuck-tip"));
             actions.changed |= toggle.changed();
-            if recovering {
-                ui.label(egui::RichText::new(aurora_i18n::tr!("follow-recovering")).color(p.muted));
+            let pause = widgets::action_button_if(
+                ui,
+                p,
+                if status.held() {
+                    "player-play-filled"
+                } else {
+                    "player-pause-filled"
+                },
+                if status.held() {
+                    aurora_i18n::tr!("follow-resume")
+                } else {
+                    aurora_i18n::tr!("follow-pause")
+                },
+                ActionKind::Flat,
+                egui::vec2(ui.available_width(), 28.0),
+                status != FollowStatus::Recovering,
+            );
+            if pause.clicked() {
+                if status.held() {
+                    actions.resume = true;
+                } else {
+                    actions.pause = true;
+                }
             }
             let stop = widgets::action_button(
                 ui,
@@ -60,7 +111,11 @@ impl FollowUi {
             );
             actions.stop |= stop.clicked();
             #[cfg(test)]
-            self.rects.extend([slider.rect, toggle.rect, stop.rect]);
+            {
+                self.rects.extend([slider.rect, toggle.rect, stop.rect, pause.rect]);
+                self.rects.extend(presets);
+                self.rects.push(movement.response.rect);
+            }
         });
         // Closing the controller also stops its follow, including Ctrl+W.
         actions.stop |= !self.open;
@@ -77,6 +132,16 @@ mod tests {
     use super::*;
 
     fn frame(ctx: &egui::Context, panel: &mut FollowUi, settings: &mut FollowSettings, events: Vec<egui::Event>) -> Actions {
+        frame_status(ctx, panel, settings, FollowStatus::Following, events).0
+    }
+
+    fn frame_status(
+        ctx: &egui::Context,
+        panel: &mut FollowUi,
+        settings: &mut FollowSettings,
+        status: FollowStatus,
+        events: Vec<egui::Event>,
+    ) -> (Actions, Vec<egui::epaint::ClippedShape>) {
         let mut actions = Actions::default();
         let mut output = ctx.run_ui(
             egui::RawInput {
@@ -90,13 +155,13 @@ mod tests {
                     ui.ctx(),
                     &crate::theme::Theme::default().palette(),
                     "Demo resident",
-                    false,
+                    status,
                     settings,
                 );
             },
         );
         output.textures_delta.clear();
-        actions
+        (actions, output.shapes)
     }
 
     fn click(ctx: &egui::Context, panel: &mut FollowUi, settings: &mut FollowSettings, pos: egui::Pos2) -> Actions {
@@ -159,5 +224,87 @@ mod tests {
         );
         assert!(actions.stop);
         assert!(!panel.open);
+    }
+    fn click_status(
+        ctx: &egui::Context,
+        panel: &mut FollowUi,
+        settings: &mut FollowSettings,
+        status: FollowStatus,
+        pos: egui::Pos2,
+    ) -> Actions {
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame_status(ctx, panel, settings, status, vec![egui::Event::PointerMoved(pos)]);
+        frame_status(ctx, panel, settings, status, vec![button(true)]);
+        frame_status(ctx, panel, settings, status, vec![button(false)]).0
+    }
+
+    #[test]
+    fn follow_controls_presets_pause_resume_and_recovery_lock_use_real_buttons() {
+        let ctx = egui::Context::default();
+        let mut panel = FollowUi {
+            open: true,
+            ..Default::default()
+        };
+        let mut settings = FollowSettings::default();
+        for _ in 0..3 {
+            frame(&ctx, &mut panel, &mut settings, vec![]);
+        }
+        for (index, distance) in [(4, 1.0), (5, 3.0), (6, 6.0)] {
+            let pos = panel.rects[index].center();
+            let action = click(&ctx, &mut panel, &mut settings, pos);
+            assert!(action.changed && action.save);
+            assert_eq!(settings.distance, distance);
+        }
+        let pos = panel.rects[3].center();
+        assert!(click_status(&ctx, &mut panel, &mut settings, FollowStatus::Following, pos).pause);
+        for status in [
+            FollowStatus::Paused,
+            FollowStatus::TargetUnavailable,
+            FollowStatus::Blocked,
+            FollowStatus::FlightBlocked,
+        ] {
+            frame_status(&ctx, &mut panel, &mut settings, status, vec![]);
+            let pos = panel.rects[3].center();
+            let action = click_status(&ctx, &mut panel, &mut settings, status, pos);
+            assert!(action.resume && !action.pause);
+        }
+        frame_status(&ctx, &mut panel, &mut settings, FollowStatus::Recovering, vec![]);
+        let pos = panel.rects[3].center();
+        let action = click_status(&ctx, &mut panel, &mut settings, FollowStatus::Recovering, pos);
+        assert!(!action.resume && !action.pause);
+        let stop = panel.rects[2].center();
+        assert!(click_status(&ctx, &mut panel, &mut settings, FollowStatus::Recovering, stop).stop);
+    }
+
+    #[test]
+    fn follow_movement_menu_selects_and_saves_walk_only() {
+        let ctx = egui::Context::default();
+        let mut panel = FollowUi {
+            open: true,
+            ..Default::default()
+        };
+        let mut settings = FollowSettings::default();
+        for _ in 0..3 {
+            frame(&ctx, &mut panel, &mut settings, vec![]);
+        }
+        let pos = panel.rects[7].center();
+        click(&ctx, &mut panel, &mut settings, pos);
+        let (_, shapes) = frame_status(&ctx, &mut panel, &mut settings, FollowStatus::Following, vec![]);
+        fn find(shape: &egui::Shape) -> Option<egui::Pos2> {
+            match shape {
+                egui::Shape::Text(t) if t.galley.text() == aurora_i18n::tr!("follow-mode-walk") => Some(t.pos + t.galley.size() * 0.5),
+                egui::Shape::Vec(items) => items.iter().find_map(find),
+                _ => None,
+            }
+        }
+        let at = shapes.iter().find_map(|shape| find(&shape.shape)).expect("walk-only option");
+        let action = click(&ctx, &mut panel, &mut settings, at);
+        assert_eq!(settings.movement, FollowMovement::WalkOnly);
+        assert!(action.changed && action.save);
     }
 }

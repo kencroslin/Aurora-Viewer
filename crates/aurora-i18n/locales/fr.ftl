@@ -2120,7 +2120,7 @@ ui-worldmap-center-map-on-my-position = Centrer la carte sur ma position
 build-ui-object-circle = Cercle
 ui-contacts-contact-sets = Cercles
 contacts-import = Importer des cercles de contacts…
-contacts-import-hint = Choisissez settings_friends_groups.xml dans le dossier de votre compte du Legacy Viewer, ou un cercle exporté. Les membres sont réunis ; vos couleurs et surnoms existants sont conservés.
+contacts-import-hint = Prévisualiser un cercle partagé ou un fichier XML de l’ancien viewer avant l’importation.
 contacts-import-file-type = Cercles de contacts (XML)
 contacts-import-success = Cercles de contacts importés ({ $count }). Vos membres, couleurs et surnoms existants ont été conservés.
 contacts-import-failed = Impossible d’importer les cercles de contacts. Choisissez un fichier XML de cercles valide (16 Mio maximum) et vérifiez que le dossier des paramètres de votre compte est accessible en écriture. Vos contacts ont été conservés.
@@ -5992,7 +5992,7 @@ common-follow = Suivre
 follow-title = Suivi
 follow-distance = Distance de suivi
 follow-teleport-if-stuck = Se téléporter en cas de blocage
-follow-teleport-if-stuck-tip = En cas de blocage, se téléporter près de la cible et reprendre le suivi. Sinon, arrêter le suivi.
+follow-teleport-if-stuck-tip = En cas de blocage, tenter de se téléporter près de la cible et reprendre le suivi. Sinon, mettre en pause avec un état bloqué.
 follow-recovering = Reprise après téléportation…
 ui-context-go-to-avatar = Rejoindre
 ui-context-stop-following = Arrêter de suivre
@@ -13946,3 +13946,67 @@ ui-options-attached-particles-hint = Affiche les particules de ce que portent le
 # Preferences › Graphics: progressive draw distance (FSRenderFarClipStepping)
 ui-options-draw-distance-stepping = Distance d'affichage progressive
 ui-options-draw-distance-stepping-hint = Après la connexion et après une téléportation vers une autre région, la distance d'affichage part de 32 m et double jusqu'à la vôtre, pour que ce qui est proche se charge d'abord.
+
+group-contacts-select-all = Tout sélectionner pour un cercle
+
+contacts-share-export = Exporter le cercle sélectionné…
+
+contacts-share-exported = Cercle exporté. Seuls son nom et les identifiants des membres sont inclus.
+
+contacts-share-export-failed = Impossible d’exporter ce cercle. Vérifiez que la destination est accessible en écriture.
+
+contacts-share-preview = Importer des cercles — aperçu
+
+contacts-share-preserve = Vérifiez chaque cercle avant l’importation. Les membres et réglages locaux sont conservés. Les notes et surnoms du fichier ne sont pas importés.
+
+contacts-share-new = Créer un nouveau cercle
+
+contacts-share-merge = Fusionner dans un cercle existant
+
+contacts-share-name = Nom du nouveau cercle
+
+contacts-share-counts = { $members } membres · { $added } à ajouter · { $duplicates } déjà présents
+
+contacts-share-invalid = Sélectionnez au moins un cercle. Les nouveaux noms doivent être libres et chaque cercle sélectionné doit avoir une destination différente.
+
+contacts-share-apply = Importer les cercles sélectionnés
+
+contacts-names-loading = Noms disponibles : { $known } / { $total } · Chargement progressif…
+
+contacts-compare-show = Comparer les membres…
+contacts-compare-hide = Masquer la comparaison
+contacts-compare-added = Nouveaux dans le fichier partagé
+contacts-compare-common = Déjà dans les deux
+contacts-compare-local = Uniquement dans votre ensemble local
+contacts-compare-retained = { $count } membres locaux uniquement · conservés lors de la fusion
+contacts-compare-local-help = Ces membres sont absents de ce fichier, mais resteront dans votre ensemble. Cela ne signifie pas qu’ils ont quitté le groupe.
+contacts-compare-results = { $shown } membres sur { $total }
+contacts-compare-empty = Aucun membre correspondant.
+
+follow-mode-walk = Marche uniquement
+follow-mode-auto = Auto
+follow-mode-run = Course autorisée
+follow-movement = Déplacement au sol
+follow-mode-tip = Auto suit la course de la cible. Course autorisée permet de courir pour rattraper la cible. Marche uniquement reste à la marche. Votre réglage habituel revient en pause ou à l’arrêt.
+follow-preset-close = Proche (1 m)
+follow-preset-companion = Compagnon (3 m)
+follow-preset-trail = À distance (6 m)
+follow-pause = Mettre en pause
+follow-resume = Reprendre le suivi
+follow-status-active = Suivi en cours
+follow-status-nearby = À la distance de suivi
+follow-status-paused = En pause · Vous pouvez vous déplacer puis reprendre.
+follow-status-missing = Cible indisponible · Reprenez lorsqu’elle sera à proximité.
+follow-status-blocked = Déplacement bloqué · Reprenez pour réessayer.
+follow-status-flight = Vol interdit ici · Reprenez lorsque les conditions changent.
+
+facing-selected = Se tourner vers cet avatar
+facing-keep = Rester tourné vers cet avatar
+facing-stop = Arrêter de se tourner
+facing-title = Orientation continue
+facing-active = Orientation continue vers cet avatar.
+facing-waiting = En attente du retour de cet avatar à proximité.
+facing-paused = Orientation en pause en position assise ou lorsque le déplacement est limité.
+facing-unavailable = Impossible de se tourner vers cet avatar. Levez-vous, quittez la vue subjective et vérifiez sa présence à proximité.
+facing-no-nearby = Aucun avatar chargé à proximité vers lequel se tourner.
+facing-keep-tip = Choisit l’avatar chargé le plus proche, puis reste tourné vers cette même personne. Cliquez à nouveau pour arrêter. Vous pouvez aussi choisir une personne dans son menu.

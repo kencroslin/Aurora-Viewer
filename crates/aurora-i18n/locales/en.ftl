@@ -2117,7 +2117,7 @@ ui-worldmap-center-map-on-my-position = Center map on my position
 build-ui-object-circle = Circle
 ui-contacts-contact-sets = Contact sets
 contacts-import = Import contact sets…
-contacts-import-hint = Choose settings_friends_groups.xml from your Legacy Viewer account folder, or an exported contact set. Members are merged; existing colours and nicknames are kept.
+contacts-import-hint = Preview a shared contact set or a Legacy Viewer XML file before importing.
 contacts-import-file-type = Contact sets (XML)
 contacts-import-success = Contact sets imported ({ $count }). Existing members, colours and nicknames were kept.
 contacts-import-failed = Could not import contact sets. Choose a valid contact sets XML file (up to 16 MiB) and check that your account settings folder is writable. Your contacts were kept.
@@ -5984,7 +5984,7 @@ common-follow = Follow
 follow-title = Following
 follow-distance = Target distance
 follow-teleport-if-stuck = Teleport if stuck
-follow-teleport-if-stuck-tip = When blocked, teleport beside the target and resume following. When off, stop following instead.
+follow-teleport-if-stuck-tip = When blocked, try teleporting beside the target and resume following. When off or unavailable, pause with a blocked status instead.
 follow-recovering = Resuming after teleport…
 ui-context-go-to-avatar = Go to
 ui-context-stop-following = Stop following
@@ -13947,3 +13947,67 @@ ui-options-attached-particles-hint = Draw the particles of what avatars wear: sp
 # Preferences › Graphics: progressive draw distance (FSRenderFarClipStepping)
 ui-options-draw-distance-stepping = Progressive draw distance
 ui-options-draw-distance-stepping-hint = After logging in and after a teleport to another region, the draw distance starts at 32 m and doubles back up to yours, so that what is near loads first.
+
+group-contacts-select-all = Select all for contact set
+
+contacts-share-export = Export selected set…
+
+contacts-share-exported = Contact set exported. Only the set name and member IDs were included.
+
+contacts-share-export-failed = Could not export this set. Check that the destination is writable.
+
+contacts-share-preview = Import contact sets — preview
+
+contacts-share-preserve = Review each set before importing. Existing members and local settings are kept. Notes and aliases from the file are not imported.
+
+contacts-share-new = Create new set
+
+contacts-share-merge = Merge into existing set
+
+contacts-share-name = New set name
+
+contacts-share-counts = { $members } members · add { $added } · { $duplicates } already present
+
+contacts-share-invalid = Select at least one set. New names must be unused, and each selected set needs a different destination.
+
+contacts-share-apply = Import selected sets
+
+contacts-names-loading = Names available: { $known } / { $total } · Loading gradually…
+
+contacts-compare-show = Compare members…
+contacts-compare-hide = Hide comparison
+contacts-compare-added = New in shared file
+contacts-compare-common = Already in both
+contacts-compare-local = Only in your local set
+contacts-compare-retained = { $count } local-only members · kept when merging
+contacts-compare-local-help = These members are absent from this file, but will stay in your set. This does not prove they left the group.
+contacts-compare-results = { $shown } of { $total } members
+contacts-compare-empty = No matching members.
+
+follow-mode-walk = Walk only
+follow-mode-auto = Auto
+follow-mode-run = Run allowed
+follow-movement = Ground movement
+follow-mode-tip = Auto follows the target’s running. Run allowed can run to catch up when far behind. Walk only stays walking. Your normal run setting returns when paused or stopped.
+follow-preset-close = Close (1 m)
+follow-preset-companion = Companion (3 m)
+follow-preset-trail = Trail (6 m)
+follow-pause = Pause follow
+follow-resume = Resume follow
+follow-status-active = Following
+follow-status-nearby = Within follow distance
+follow-status-paused = Paused · You can move manually, then resume.
+follow-status-missing = Target unavailable · Resume when they are nearby again.
+follow-status-blocked = Movement blocked · Resume to try again.
+follow-status-flight = Flight is not permitted here · Resume after conditions change.
+
+facing-selected = Face selected avatar
+facing-keep = Keep facing avatar
+facing-stop = Stop facing
+facing-title = Continuous facing
+facing-active = Continuously facing this avatar.
+facing-waiting = Waiting for this avatar to become available again.
+facing-paused = Facing paused while seated or movement is restricted.
+facing-unavailable = Unable to face this avatar. Stand up, leave mouselook, and check that they are nearby.
+facing-no-nearby = No nearby loaded avatar is available to face.
+facing-keep-tip = Start with the nearest loaded avatar, then keep facing that same person. Click again to stop. You can also choose a person from their avatar menu.

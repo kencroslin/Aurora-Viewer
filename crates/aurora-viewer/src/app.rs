@@ -76,6 +76,7 @@ mod env_apply;
 mod env_day_editor;
 mod env_editor;
 mod external_links;
+mod facing;
 mod follow;
 mod gestures;
 mod give_demo;
@@ -4055,9 +4056,7 @@ impl App {
                 // New region must learn walk/run again (LLAgent::sendWalkRun
                 // after RegionHandshake, llviewermessage.cpp). Without this
                 // Always run stays lit in Controls while the sim walks (#3041).
-                self.send(NetCommand::SetAlwaysRun(
-                    self.always_run || self.temp_run.is_some() || self.joystick.running,
-                ));
+                self.send(NetCommand::SetAlwaysRun(self.commanded_run()));
                 // (a border crossing leaves the camera where it is)
                 if !self.world.arrived_by_crossing {
                     let local = self.world.arrived_by_local_teleport;
@@ -4478,6 +4477,7 @@ impl App {
 
     /// Escape / "Reset camera" (handle_reset_view).
     fn reset_camera_view(&mut self) {
+        self.world.facing.stop();
         self.stop_autopilot(true);
         self.joystick.active = false;
         self.camera.clear_flycam();
@@ -4580,7 +4580,7 @@ impl App {
             {
                 self.temp_run = Some(group);
                 if !self.always_run {
-                    self.send(NetCommand::SetAlwaysRun(true));
+                    self.send(NetCommand::SetAlwaysRun(self.commanded_run()));
                 }
             }
             self.last_tap = Some((group, Instant::now()));
@@ -4599,7 +4599,7 @@ impl App {
         if !still_held {
             self.temp_run = None;
             if !self.always_run && !self.joystick.running {
-                self.send(NetCommand::SetAlwaysRun(false));
+                self.send(NetCommand::SetAlwaysRun(self.commanded_run()));
             }
         }
     }
@@ -7543,6 +7543,7 @@ impl App {
     fn begin_teleport(&mut self, dest: String, show_progress: bool) {
         self.portal_journey = None;
         self.drop_clicks();
+        self.world.facing.stop();
         self.stop_autopilot(true);
         if self.hud_drag.is_some() {
             self.on_left_release();
@@ -7712,9 +7713,7 @@ impl App {
             return;
         }
         self.always_run = on;
-        self.send(NetCommand::SetAlwaysRun(
-            self.always_run || self.temp_run.is_some() || self.joystick.running,
-        ));
+        self.send(NetCommand::SetAlwaysRun(self.commanded_run()));
         self.world.system_message(if self.always_run {
             aurora_i18n::tr!("app-always-run-enabled")
         } else {
@@ -7742,7 +7741,9 @@ impl App {
             return;
         }
         self.world.cancel_friend_join_flight();
-        self.stop_autopilot(true);
+        if self.autopilot.as_ref().is_none_or(|ap| ap.controls_active()) {
+            self.stop_autopilot(true);
+        }
         self.release_native_movelock();
         self.movement_runtime.cancel_water_exit();
         self.world.agent.flying = !self.world.agent.flying;
@@ -9555,6 +9556,7 @@ impl App {
             self.input = input;
         }
         self.update_autopilot(dt);
+        self.update_facing();
         if self.in_world() && self.settings.automatic_land {
             self.world.auto_land(&self.input);
         }
@@ -9671,7 +9673,7 @@ impl App {
                 self.movement_runtime.state,
                 self.bridge_runtime.captures_motion(Instant::now()),
             );
-            if self.autopilot.is_some() {
+            if self.autopilot.as_ref().is_some_and(|ap| ap.controls_active()) {
                 c.flags |= crate::autopilot::AU_FLAGS_CLIENT_AUTOPILOT;
             }
             // RenderHideGroupTitle (send_agent_update)
@@ -14356,6 +14358,14 @@ impl App {
             }
             BarAction::CustomizeBars => self.toolbar_ui.open = true,
             BarAction::StopAnimations => self.stop_current_animations(),
+            BarAction::FaceNearest => self.face_nearest(false),
+            BarAction::ToggleKeepFacing => {
+                if self.world.facing.target.is_some() {
+                    self.world.facing.stop();
+                } else {
+                    self.face_nearest(true);
+                }
+            }
             BarAction::ResyncAnimations => self.scene.resync_animations(Instant::now()),
         }
     }
@@ -17834,6 +17844,7 @@ impl App {
                 self.controls_window(&ctx, &p);
                 self.movelock_window(&ctx, &p);
                 self.follow_window(&ctx, &p);
+                self.facing_window(&ctx, &p);
                 self.portals_window(&ctx, &p);
                 self.report_abuse_ui(&ctx, &p);
                 self.particle_editor_window(&ctx, &p);
@@ -17997,6 +18008,7 @@ impl App {
                 self.toolbar_ui.photo_roll_empty = self.snapshots.reel.reel.is_empty();
                 self.toolbar_ui.photo_roll_active = self.snapshots.reel.quick.is_open();
                 self.toolbar_ui.shown = ui::toolbar::Shown {
+                    keep_facing: self.world.facing.target.is_some(),
                     profile: self.profile_ui.mine_shown(self.world.agent_id),
                     build: self.build.open,
                     poser: self.ik_editor.open && self.ik_editor.posing(),

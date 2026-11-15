@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 pub(crate) mod drag;
 mod importing;
+pub(crate) mod list_cache;
 mod visuals;
 #[cfg(test)]
 mod window_tests;
@@ -163,6 +164,8 @@ enum Dialog {
 #[derive(Default)]
 pub struct ContactsUi {
     import_job: Option<importing::Job>,
+    import_preview: Option<importing::Preview>,
+    export_job: Option<importing::ExportJob>,
     friend_filter: String,
     friends_sel: Vec<Uuid>,
     friends_anchor: Option<Uuid>,
@@ -173,6 +176,7 @@ pub struct ContactsUi {
     /// contact sets tab shows the same one.
     pub(crate) set_choice: Option<String>,
     set_filter: String,
+    set_cache: list_cache::SetListCache,
     set_sel: Vec<Uuid>,
     set_anchor: Option<Uuid>,
     dialog: Option<Dialog>,
@@ -350,6 +354,7 @@ pub fn apply_set_edit(world: &mut World, edit: SetEdit) {
 /// People), and the configuration window of a contact set.
 pub fn dialog_windows(ctx: &egui::Context, p: &Palette, world: &mut World, st: &mut ContactsUi) -> Vec<ContactsAction> {
     importing::poll(world, st);
+    importing::show_preview(ctx, p, world, st);
     let mut actions = Vec::new();
     // the resident picker shared with About Land (LLFloaterAvatarPicker),
     // also opened by the friends tab of the People window
@@ -1609,40 +1614,13 @@ fn sets_tab(
     };
     st.set_choice = Some(choice.clone());
     let mutable = !ContactSets::is_internal(&choice);
-    let friend_ids: Vec<Uuid> = world.social.friends.iter().map(|f| f.id).collect();
-    let social = &world.social;
-    let mut members = world.contact_sets.members(&choice, &friend_ids, |id| social.is_friend(id));
-    let o = social.avatar_names.options;
-    let name_of = |id: &Uuid| {
-        social
-            .avatar_names
-            .get(id)
-            .map(|n| n.complete(&o))
-            .or_else(|| social.names.get(id).cloned())
-            .unwrap_or_else(|| "â€¦".into())
-    };
-    let online = |id: &Uuid| social.friends.iter().any(|f| f.id == *id && f.online);
-    let count = members.len();
-    let filter = st.set_filter.trim().to_lowercase();
-    members.retain(|id| super::people::matches_name(world, id, &name_of(id), &filter));
-    // FSPanelContactSets::updateAvatarListSorting
-    if world.contact_sets.sorts_by_online(&choice) {
-        members.sort_by_cached_key(|id| (!online(id), crate::natural_order::key(&name_of(id))));
-    } else {
-        members.sort_by_cached_key(|id| crate::natural_order::key(&name_of(id)));
-    }
-    let rows: Vec<(Uuid, String, bool, Option<Color32>)> = members
-        .iter()
-        .map(|id| {
-            let color = world.contact_sets.friend_color(id, |x| social.is_friend(x)).map(color32);
-            (*id, name_of(id), online(id), color)
-        })
-        .collect();
-    for (id, ..) in &rows {
-        world.social.want_name(*id);
-    }
-    st.set_sel.retain(|id| members.contains(id));
-    let order = members.clone();
+    let mut cache = std::mem::take(&mut st.set_cache);
+    cache.update(world, &choice, &st.set_filter);
+    let count = cache.total;
+    let members = &cache.members;
+    st.set_sel.retain(|id| cache.visible.contains(id));
+    let order = members;
+    let online: HashSet<_> = world.social.friends.iter().filter_map(|f| f.online.then_some(f.id)).collect();
     let h = fill_height(ui, DEFAULT_TAB_H).max(120.0);
     ui.horizontal_top(|ui| {
         let list_w = (ui.available_width() - BUTTONS_W - 8.0).max(120.0);
@@ -1650,7 +1628,7 @@ fn sets_tab(
             ui.set_width(list_w);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                let combo_w = list_w - 4.0 * 24.0;
+                let combo_w = list_w - 5.0 * 24.0;
                 egui::ComboBox::from_id_salt("contact_set_combo")
                     .width(combo_w - 8.0)
                     .selected_text(set_label(&choice))
@@ -1676,11 +1654,28 @@ fn sets_tab(
                             }
                         }
                     });
-                if icon_button(ui, p, "file-import", aurora_i18n::tr!("contacts-import"), st.import_job.is_none())
-                    .on_hover_text(aurora_i18n::tr!("contacts-import-hint"))
-                    .clicked()
+                if icon_button(
+                    ui,
+                    p,
+                    "file-import",
+                    aurora_i18n::tr!("contacts-import"),
+                    st.can_import_contact_sets(),
+                )
+                .on_hover_text(aurora_i18n::tr!("contacts-import-hint"))
+                .clicked()
                 {
                     st.import_contact_sets(ui.ctx(), world.agent_id);
+                }
+                if icon_button(
+                    ui,
+                    p,
+                    "file-export",
+                    aurora_i18n::tr!("contacts-share-export"),
+                    st.can_export_contact_set(world, &choice),
+                )
+                .clicked()
+                {
+                    st.export_contact_set(ui.ctx(), world, &choice);
                 }
                 if icon_button(
                     ui,
@@ -1717,23 +1712,35 @@ fn sets_tab(
             let list_h = (fill_height(ui, DEFAULT_TAB_H - 60.0) - footer_or_default(st.sets_footer)).max(60.0);
             let list = egui::Frame::new().fill(p.field.gamma_multiply(0.6)).show(ui, |ui| {
                 ui.set_width(list_w);
-                egui::ScrollArea::vertical()
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let row_h = if settings.set_list_icons { 22.0 } else { ROW_H };
+                let target = st
+                    .set_anchor
+                    .filter(|id| st.set_sel.contains(id))
+                    .or_else(|| st.set_sel.last().copied());
+                let selected_row = target.and_then(|target| members.iter().position(|id| *id == target));
+                widgets::search_scroll_to_row(ui, egui::ScrollArea::vertical(), selected_row, row_h)
                     .id_salt("contact_set_list")
                     .auto_shrink([false, false])
                     .max_height(list_h)
                     .min_scrolled_height(list_h)
-                    .show(ui, |ui| {
+                    .show_rows(ui, row_h, members.len(), |ui, range| {
                         ui.spacing_mut().item_spacing.y = 0.0;
-                        if rows.is_empty() {
+                        if members.is_empty() {
                             ui.label(
                                 RichText::new(aurora_i18n::tr!("ui-contacts-this-contact-set-is-empty"))
                                     .size(12.0)
                                     .color(p.muted),
                             );
                         }
-                        let row_h = if settings.set_list_icons { 22.0 } else { ROW_H };
-                        for (id, name, on, color) in &rows {
-                            let (rect, resp) = ui.allocate_exact_size(Vec2::new(list_w - widgets::scroll_strip(ui), row_h), Sense::click());
+                        for index in range {
+                            let id = &members[index];
+                            let name = world.social.avatar_names.complete(id).unwrap_or_else(|| world.social.name_of(id));
+                            world.social.avatar_names.want_visible(id);
+                            let on = online.contains(id);
+                            let color = world.contact_sets.friend_color(id, |x| world.social.is_friend(x)).map(color32);
+                            let (_, rect) = ui.allocate_space(Vec2::new(list_w - widgets::scroll_strip(ui), row_h));
+                            let resp = ui.interact(rect, ui.scope_id().with(("contact-set-row", id)), Sense::click());
                             widgets::reveal_search_selection(
                                 ui,
                                 &resp,
@@ -1758,7 +1765,7 @@ fn sets_tab(
                                 row_icon(ui, p, icon, pics.avatars.get(id), "user-filled");
                                 x = icon.right() + 6.0;
                             }
-                            let col = crate::ui::colors::resident_name(world, id, color.unwrap_or(if *on { p.ink } else { p.muted }));
+                            let col = crate::ui::colors::resident_name(world, id, color.unwrap_or(if on { p.ink } else { p.muted }));
                             let galley = egui::WidgetText::from(RichText::new(name.as_str()).size(12.5).color(col)).into_galley(
                                 ui,
                                 Some(egui::TextWrapMode::Truncate),
@@ -1768,7 +1775,7 @@ fn sets_tab(
                             crate::ui::widgets::paint_row_text(ui.painter(), galley, x, rect.center().y, col);
                             if resp.clicked() {
                                 let mods = ui.input(|i| i.modifiers);
-                                click_select(&mut st.set_sel, &mut st.set_anchor, &order, *id, mods);
+                                click_select(&mut st.set_sel, &mut st.set_anchor, order, *id, mods);
                             }
                             if resp.double_clicked() {
                                 actions.push(ContactsAction::Im(*id));
@@ -1785,7 +1792,7 @@ fn sets_tab(
                                 if menu::item(ui, p, "message-circle-filled", aurora_i18n::tr!("ui-contacts-send-im")) {
                                     actions.push(ContactsAction::Im(*id));
                                 }
-                                if menu::item_if(ui, p, "send-filled", aurora_i18n::tr!("common-offer-teleport"), *on) {
+                                if menu::item_if(ui, p, "send-filled", aurora_i18n::tr!("common-offer-teleport"), on) {
                                     actions.push(ContactsAction::OfferTeleport(*id));
                                 }
                                 if menu::item_if(
@@ -1807,7 +1814,22 @@ fn sets_tab(
                     .size(12.0)
                     .color(p.muted),
             );
-            st.sets_footer = c.rect.bottom() - list.response.rect.bottom();
+            let bottom = if cache.known < cache.total {
+                ui.label(
+                    RichText::new(aurora_i18n::tr!(
+                        "contacts-names-loading",
+                        known = aurora_i18n::integer(cache.known as i64),
+                        total = aurora_i18n::integer(cache.total as i64)
+                    ))
+                    .size(12.0)
+                    .color(p.muted),
+                )
+                .rect
+                .bottom()
+            } else {
+                c.rect.bottom()
+            };
+            st.sets_footer = bottom - list.response.rect.bottom();
         });
         ui.vertical(|ui| {
             ui.set_min_height(h);
@@ -1815,6 +1837,7 @@ fn sets_tab(
             set_buttons(ui, p, world, st, &choice, &set_names, actions);
         });
     });
+    st.set_cache = cache;
 }
 
 /// Buttons of the contact set panel (FSPanelContactSets::resetControls).

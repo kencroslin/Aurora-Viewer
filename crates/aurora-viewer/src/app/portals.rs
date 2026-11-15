@@ -127,7 +127,7 @@ impl App {
             && !self.world.frozen
             && !self.world.agent.seated
             && !self.world.agent.ground_sit
-            && self.autopilot.is_none();
+            && self.autopilot.as_ref().is_none_or(|ap| !ap.controls_active());
         let vertical = self.world.agent.flying || self.world.agent.position.z < self.world.main_water_height();
         let intent = if voluntary {
             movement_intent(&input, self.world.agent.yaw, vertical)

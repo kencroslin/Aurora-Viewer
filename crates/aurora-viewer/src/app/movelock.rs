@@ -62,7 +62,7 @@ impl App {
             || input.turn_right
             || input.joystick_yaw != 0.0
             || input.joystick_pitch != 0.0
-            || self.autopilot.is_some()
+            || self.autopilot.as_ref().is_some_and(|ap| ap.controls_active())
             || self.autopilot_flags != 0;
         let water_modes = self
             .settings
@@ -108,7 +108,7 @@ impl App {
         let transient = movelock::airborne(raw, self.world.agent.flying, supported, self.world.agent.velocity.z, now, |id| {
             self.scene.anims.get(id).map(|a| Duration::from_secs_f32(a.anim.duration))
         });
-        let travel = if !self.movement_runtime.allows_idle_anchor() || self.autopilot.is_some() {
+        let travel = if !self.movement_runtime.allows_idle_anchor() || self.autopilot.as_ref().is_some_and(|ap| ap.controls_active()) {
             Travel::Other
         } else if near_water && !(supported && position.z - height * 0.5 >= water - 0.1) {
             Travel::Water

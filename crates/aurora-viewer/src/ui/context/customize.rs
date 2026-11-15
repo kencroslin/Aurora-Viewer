@@ -267,6 +267,8 @@ fn action_key(action: &CtxAction) -> String {
         CtxAction::GodKick(_, aurora_net::god::KICK_FREEZE) => "GodFreeze",
         CtxAction::GodKick(..) => "GodUnfreeze",
         CtxAction::LookAtAvatar(..) => "LookAtAvatar",
+        CtxAction::FaceAvatar(..) => "FaceAvatar",
+        CtxAction::KeepFacingAvatar(..) | CtxAction::StopFacing => "KeepFacingAvatar",
         CtxAction::EditPbr(..) => "EditPbr",
         CtxAction::ObjectProfile(..) => "ObjectProfile",
         CtxAction::Pathfinding { characters: false, .. } => "RegionObjects",
