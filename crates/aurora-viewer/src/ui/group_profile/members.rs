@@ -812,7 +812,11 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
     let targets: Vec<Uuid> = st.members.targets().into_iter().filter(|id| d.members.contains_key(id)).collect();
     let (can_eject, can_ban) = admin_members::eject_and_ban(d, &me(c, v), &targets);
     let selected = (targets.len() == 1).then(|| targets[0]);
-    let selected_count = if st.members.contacts.is_empty() { targets.len() } else { st.members.contacts.len() };
+    let selected_count = if st.members.contacts.is_empty() {
+        targets.len()
+    } else {
+        st.members.contacts.len()
+    };
     let text = if selected_count > 0 {
         aurora_i18n::tr!("ui-group-admin-selected", count = selected_count as i64)
     } else {
