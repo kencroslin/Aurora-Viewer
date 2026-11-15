@@ -144,6 +144,13 @@ impl App {
         if self.world.rlva.has("showworldmap") {
             self.panels.world_map = false;
         }
+        let was_running = self.commanded_run();
+        if let Some(ap) = &mut self.autopilot {
+            ap.constrain_follow_run(!(self.world.rlva.has("alwaysrun") || self.world.rlva.has("temprun")));
+        }
+        if self.commanded_run() != was_running {
+            self.sync_run();
+        }
         if self.world.rlva.has("alwaysrun") && self.always_run {
             self.set_always_run(false);
         }

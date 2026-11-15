@@ -261,6 +261,7 @@ pub(crate) const AURORA_SIZE: Vec2 = Vec2::new(520.0, 560.0);
 #[derive(Default)]
 pub struct PeopleUi {
     pub filter: String,
+    set_cache: super::contacts::list_cache::SetListCache,
     pub friends_tab: usize,
     /// Object name typed in "Block by name".
     pub block_name: String,

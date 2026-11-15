@@ -255,3 +255,52 @@ fn the_torn_off_window_keeps_its_size() {
         );
     }
 }
+
+#[test]
+fn contact_large_legacy_list_filters_last_member_and_reveals_it_after_clearing_search() {
+    let mut world = World::new(std::sync::Arc::new(crate::scene::avatar::AvatarLibrary::load()));
+    let ids: Vec<_> = (1..=5000).map(Uuid::from_u128).collect();
+    world.contact_sets.add_set("Large");
+    world.contact_sets.add_to_set(&ids, "Large", |_| false);
+    for (n, id) in ids.iter().enumerate() {
+        world.social.names.insert(*id, format!("Member {}", n + 1));
+    }
+    let mut st = ContactsUi::default();
+    let p = crate::theme::Theme::default().palette();
+    let settings = ContactsSettings::default();
+    let pics = HashMap::new();
+    let images = Pics {
+        avatars: &pics,
+        images: &pics,
+    };
+    let mut actions = Vec::new();
+    let mut frames = Frames::new();
+    let mut draw = |ui: &mut egui::Ui, st: &mut ContactsUi, reveal: bool| {
+        ui.set_width(600.0);
+        if reveal {
+            let key = egui::Id::unique("search_selection_reveal").with(ui.layer_id());
+            let frame = ui.ctx().cumulative_frame_nr();
+            ui.ctx().data_mut(|data| data.insert_temp(key, frame));
+        }
+        super::sets_tab(ui, &p, &mut world, st, &settings, &images, &mut actions);
+    };
+    let mut texts = Vec::new();
+    for _ in 0..3 {
+        texts = frames.run(Vec::new(), |ui| draw(ui, &mut st, false));
+    }
+    let drawn = texts.iter().filter(|t| t.source.starts_with("Member ")).count();
+    assert!(drawn > 0 && drawn < 100);
+    st.set_filter = "member 5000".into();
+    for _ in 0..3 {
+        texts = frames.run(Vec::new(), |ui| draw(ui, &mut st, false));
+    }
+    assert!(texts.iter().any(|t| t.source == "Member 5000"));
+    st.set_sel = vec![ids[4999]];
+    st.set_anchor = Some(ids[4999]);
+    st.set_filter.clear();
+    for _ in 0..3 {
+        texts = frames.run(Vec::new(), |ui| draw(ui, &mut st, true));
+    }
+    assert!(texts.iter().any(|t| t.source == "Member 5000"));
+    assert_eq!(st.set_sel, vec![ids[4999]]);
+}

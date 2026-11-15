@@ -6,10 +6,15 @@ use crate::demo::link::{Delivery, DemoLink, Keys};
 use crate::own_motion::Intent;
 
 impl App {
-    /// The run state the simulator was told (SetAlwaysRun): "Always run",
-    /// a double-tap run, or the run to a double-clicked point.
+    /// Active follow owns the temporary run choice. Pausing/stopping returns
+    /// Always Run, double-tap run and ordinary point travel to their usual rules.
     pub(super) fn running(&self) -> bool {
-        self.always_run || self.temp_run.is_some() || self.autopilot.as_ref().is_some_and(|a| a.run)
+        let manual = self.always_run || self.temp_run.is_some();
+        self.autopilot.as_ref().map_or(manual, |a| a.running(manual))
+    }
+
+    pub(super) fn commanded_run(&self) -> bool {
+        self.running() || (self.joystick.running && self.autopilot.as_ref().is_none_or(|a| a.leader.is_none() || !a.controls_active()))
     }
 
     /// Offline with AURORA_DEMO_LINK: the keys go to the stand-in simulator

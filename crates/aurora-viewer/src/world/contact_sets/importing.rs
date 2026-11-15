@@ -9,6 +9,9 @@ impl ImportData {
     pub fn from_xml(bytes: &[u8]) -> Result<Self, &'static str> {
         let mut data = aurora_llsd::from_xml(bytes).map_err(|_| "invalid LLSD XML")?;
         if data.has("groupname") && !data["groupname"].is_map() {
+            if data.has("share_version") && !matches!(&data["share_version"], Llsd::Integer(1)) {
+                return Err("unsupported sharing version");
+            }
             let Llsd::String(name) = &data["groupname"] else {
                 return Err("invalid set name");
             };
@@ -62,6 +65,132 @@ impl ImportData {
         };
         sets.import(&data);
         Ok(Self(sets))
+    }
+}
+
+/// A recipient explicitly chooses whether to create or merge each source set.
+#[derive(Clone, Debug)]
+pub struct ImportChoice {
+    pub source: String,
+    pub target: String,
+    pub create: bool,
+}
+
+impl ImportChoice {
+    pub fn target_name(&self) -> &str {
+        if self.create { self.target.trim() } else { &self.target }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImportCounts {
+    pub added: usize,
+    pub duplicates: usize,
+    pub retained: usize,
+}
+
+/// UUID differences against one explicitly chosen destination. Local-only
+/// members are informational: importing never removes them.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ImportComparison {
+    pub added: Vec<Uuid>,
+    pub common: Vec<Uuid>,
+    pub retained: Vec<Uuid>,
+}
+
+/// An individual LLSD XML export containing no personal metadata.
+pub fn shared_set_xml(name: &str, members: &BTreeSet<Uuid>) -> Vec<u8> {
+    let mut data = Llsd::new_map();
+    data.insert("groupname", name);
+    data.insert("share_version", 1);
+    let mut friends = Llsd::new_map();
+    for id in members {
+        friends.insert(id.to_string(), "");
+    }
+    data.insert("friends", friends);
+    aurora_llsd::to_xml(&data)
+}
+
+impl ImportData {
+    pub fn set_names(&self) -> Vec<String> {
+        self.0.set_names()
+    }
+
+    pub fn member_count(&self, source: &str) -> usize {
+        self.0.set(source).map_or(0, |s| s.friends.len())
+    }
+}
+
+impl ContactSets {
+    /// Planning and validation are read-only. A batch gets one atomic save.
+    pub fn preview_import(&self, data: &ImportData, choices: &[ImportChoice]) -> Result<Vec<ImportCounts>, &'static str> {
+        if choices.is_empty() {
+            return Err("no selected sets");
+        }
+        let mut targets = BTreeSet::new();
+        let mut sources = BTreeSet::new();
+        let mut counts = Vec::new();
+        for choice in choices {
+            let source = data.0.set(&choice.source).ok_or("missing source set")?;
+            let target = choice.target_name();
+            if target.is_empty() || Self::is_internal(target) {
+                return Err("invalid destination");
+            }
+            if !targets.insert(target.to_owned()) || !sources.insert(choice.source.clone()) {
+                return Err("duplicate destination or source");
+            }
+            let existing = self.set(target);
+            if choice.create && existing.is_some() {
+                return Err("new set already exists");
+            }
+            if !choice.create && existing.is_none() {
+                return Err("merge set no longer exists");
+            }
+            let duplicates = existing.map_or(0, |s| source.friends.intersection(&s.friends).count());
+            counts.push(ImportCounts {
+                added: source.friends.len() - duplicates,
+                duplicates,
+                retained: existing.map_or(0, |s| s.friends.len() - duplicates),
+            });
+        }
+        Ok(counts)
+    }
+
+    /// A read-only comparison. Validate the selected source and destination
+    /// exactly as import does; the caller may cache this by model generation.
+    pub fn compare_import(&self, data: &ImportData, choice: &ImportChoice) -> Result<ImportComparison, &'static str> {
+        self.preview_import(data, std::slice::from_ref(choice))?;
+        let source = &data.0.set(&choice.source).ok_or("missing source set")?.friends;
+        let empty = BTreeSet::new();
+        let target = self.set(choice.target_name()).map_or(&empty, |set| &set.friends);
+        Ok(ImportComparison {
+            added: source.difference(target).copied().collect(),
+            common: source.intersection(target).copied().collect(),
+            retained: target.difference(source).copied().collect(),
+        })
+    }
+
+    /// Import memberships only; never bring in a sender's aliases or settings.
+    /// Revalidation at confirmation catches renames/deletions since the preview.
+    pub fn import_choices(
+        &mut self,
+        data: &ImportData,
+        choices: &[ImportChoice],
+        is_friend: impl Fn(&Uuid) -> bool,
+    ) -> std::io::Result<usize> {
+        self.preview_import(data, choices)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        let mut next = ContactSets::default();
+        for choice in choices {
+            let target = choice.target_name();
+            let Some(source) = data.0.set(&choice.source) else {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "missing source set"));
+            };
+            let mut clean = ContactSet::new(target, self.default_color);
+            clean.friends = source.friends.clone();
+            next.sets.insert(target.to_owned(), clean);
+        }
+        self.merge_import(ImportData(next), is_friend)
     }
 }
 
@@ -219,5 +348,163 @@ mod tests {
         assert_eq!(cs.export(), before);
         assert_eq!(cs.generation, generation);
         std::fs::remove_dir_all(root).expect("cleanup");
+    }
+    fn choice(source: &str, target: &str, create: bool) -> ImportChoice {
+        ImportChoice {
+            source: source.into(),
+            target: target.into(),
+            create,
+        }
+    }
+
+    #[test]
+    fn contact_sharing_export_is_membership_only_and_round_trips_unicode() {
+        let name = "Friends & <Family> 日本語";
+        let members = BTreeSet::from([id(1), id(2)]);
+        let bytes = shared_set_xml(name, &members);
+        let xml = aurora_llsd::from_xml(&bytes).expect("XML");
+        let keys: BTreeSet<_> = xml.as_map().expect("map").keys().map(String::as_str).collect();
+        assert_eq!(keys, BTreeSet::from(["groupname", "share_version", "friends"]));
+        let imported = ImportData::from_xml(&bytes).expect("share");
+        assert_eq!(imported.set_names(), vec![name]);
+        assert_eq!(imported.0.set(name).expect("set").friends, members);
+        assert!(ImportData::from_xml(&shared_set_xml("Empty", &BTreeSet::new())).is_ok());
+        let mut newer = xml.clone();
+        newer.insert("share_version", 2);
+        assert!(ImportData::from_xml(&aurora_llsd::to_xml(&newer)).is_err());
+    }
+
+    #[test]
+    fn contact_sharing_5000_preview_counts_and_merge_preserve_local_metadata() {
+        let incoming: BTreeSet<_> = (1..=5000).map(id).collect();
+        let data = ImportData::from_xml(&shared_set_xml("Shared", &incoming)).expect("share");
+        let mut cs = ContactSets::default();
+        cs.add_set("Local");
+        let existing: Vec<_> = (1..=1000).chain([9000]).map(id).collect();
+        cs.add_to_set(&existing, "Local", |_| false);
+        cs.set_color("Local", [1.0, 0.0, 0.0, 1.0]);
+        cs.set_pseudonym(&[id(1)], "Private alias", |_| false);
+        let local = cs.set("Local").expect("set").clone();
+        let plan = [choice("Shared", "Local", false)];
+        let generation = cs.generation;
+        assert_eq!(
+            cs.preview_import(&data, &plan),
+            Ok(vec![ImportCounts {
+                added: 4000,
+                duplicates: 1000,
+                retained: 1
+            }])
+        );
+        assert_eq!(cs.generation, generation, "preview must never mutate");
+        cs.import_choices(&data, &plan, |_| false).expect("merge");
+        assert_eq!(cs.set("Local").expect("set").friends.len(), 5001);
+        let mut expected = local;
+        expected.friends.extend(incoming);
+        assert_eq!(cs.set("Local"), Some(&expected));
+        assert_eq!(cs.pseudonym(&id(1)), Some("Private alias"));
+        assert_eq!(cs.preview_import(&data, &plan).expect("preview")[0].added, 0);
+    }
+
+    #[test]
+    fn contact_sharing_rejects_collisions_and_strips_imported_private_metadata() {
+        let mut source = ContactSets::default();
+        source.add_set("Source");
+        source.add_to_set(&[id(1), id(2)], "Source", |_| false);
+        source.set_pseudonym(&[id(1)], "Do not share", |_| false);
+        source.set_color("Source", [1.0, 0.0, 0.0, 1.0]);
+        let data = parse(&source.export());
+        let mut cs = ContactSets::default();
+        cs.add_set("Existing");
+        let before = cs.export();
+        for plan in [
+            vec![],
+            vec![choice("Source", "Existing", true)],
+            vec![choice("Source", "Missing", false)],
+            vec![choice("Source", ALL_SETS, true)],
+            vec![choice("Missing", "New", true)],
+            vec![choice("Source", "New", true), choice("Source", "New", true)],
+        ] {
+            assert!(cs.import_choices(&data, &plan, |_| false).is_err());
+            assert_eq!(cs.export(), before);
+        }
+        cs.import_choices(&data, &[choice("Source", "New", true)], |_| false)
+            .expect("create");
+        assert_eq!(cs.set("New").expect("new").friends.len(), 2);
+        assert_eq!(cs.set("New").expect("new").color, cs.default_color);
+        assert_eq!(cs.pseudonym(&id(1)), None);
+        assert!(cs.is_non_friend(&id(1), |_| false));
+    }
+
+    #[test]
+    fn contact_sharing_failed_save_and_stale_destination_leave_state_intact() {
+        let root = std::env::temp_dir().join(format!("contact-sharing-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("temp");
+        let mut cs = ContactSets {
+            path: Some(root.clone()),
+            ..Default::default()
+        };
+        let data = parse(&exported("Shared", id(1)));
+        let before = cs.export();
+        assert!(cs.import_choices(&data, &[choice("Shared", "New", true)], |_| false).is_err());
+        assert_eq!(cs.export(), before);
+        assert_eq!(cs.generation, 0);
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+    #[test]
+    fn contact_sharing_legacy_set_named_like_version_field_is_not_metadata() {
+        let mut source = ContactSets::default();
+        source.add_set("share_version");
+        source.add_to_set(&[id(1)], "share_version", |_| false);
+        let data = parse(&source.export());
+        assert_eq!(data.member_count("share_version"), 1);
+    }
+    #[test]
+    fn contact_comparison_5000_reports_exact_differences_without_mutation_and_merge_keeps_local_only() {
+        let incoming: BTreeSet<_> = (1..=5000).map(id).collect();
+        let data = ImportData::from_xml(&shared_set_xml("Shared", &incoming)).unwrap();
+        let mut local = ContactSets::default();
+        local.add_set("Local");
+        local.add_to_set(&(4001..=6000).map(id).collect::<Vec<_>>(), "Local", |_| false);
+        let generation = local.generation;
+        let plan = choice("Shared", "Local", false);
+        let delta = local.compare_import(&data, &plan).unwrap();
+        assert_eq!(delta.added, (1..=4000).map(id).collect::<Vec<_>>());
+        assert_eq!(delta.common, (4001..=5000).map(id).collect::<Vec<_>>());
+        assert_eq!(delta.retained, (5001..=6000).map(id).collect::<Vec<_>>());
+        assert_eq!(local.generation, generation);
+        let counts = local.preview_import(&data, std::slice::from_ref(&plan)).unwrap()[0];
+        assert_eq!((counts.added, counts.duplicates, counts.retained), (4000, 1000, 1000));
+        local.import_choices(&data, std::slice::from_ref(&plan), |_| false).unwrap();
+        assert_eq!(local.set("Local").unwrap().friends, (1..=6000).map(id).collect());
+        let again = local.compare_import(&data, &plan).unwrap();
+        assert!(again.added.is_empty());
+        assert_eq!(again.common.len(), 5000);
+        assert_eq!(again.retained.len(), 1000);
+    }
+
+    #[test]
+    fn contact_comparison_handles_empty_new_identical_and_stale_destinations() {
+        let data = ImportData::from_xml(&shared_set_xml("Empty", &BTreeSet::new())).unwrap();
+        let mut local = ContactSets::default();
+        let new = choice("Empty", "New", true);
+        assert_eq!(
+            local.compare_import(&data, &new).unwrap(),
+            ImportComparison {
+                added: vec![],
+                common: vec![],
+                retained: vec![]
+            }
+        );
+        local.add_set("Local");
+        local.add_to_set(&[id(7)], "Local", |_| false);
+        let merge = choice("Empty", "Local", false);
+        assert_eq!(local.compare_import(&data, &merge).unwrap().retained, vec![id(7)]);
+        let same = ImportData::from_xml(&shared_set_xml("Same", &BTreeSet::from([id(7)]))).unwrap();
+        let delta = local.compare_import(&same, &choice("Same", "Local", false)).unwrap();
+        assert!(delta.added.is_empty() && delta.retained.is_empty());
+        assert_eq!(delta.common, vec![id(7)]);
+        local.remove_set("Local", |_| false);
+        assert!(local.compare_import(&data, &merge).is_err());
+        assert!(local.compare_import(&data, &choice("Missing", "New", true)).is_err());
     }
 }

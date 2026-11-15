@@ -113,7 +113,8 @@ impl App {
         }
         // the target stays its centre's height above the ground
         let target = point + Vec3::Z * self.pelvis_to_foot();
-        let was_running = self.autopilot.as_ref().is_some_and(|a| a.run);
+        let was_running = self.commanded_run();
+        self.world.facing.stop();
         self.world.following_avatar = None;
         self.follow_recovery = None;
         self.follow_ui.open = false;
@@ -121,7 +122,7 @@ impl App {
         self.autopilot_stop_pending = false;
         self.autopilot_flags = 0;
         self.release_native_movelock();
-        if run != was_running {
+        if self.commanded_run() != was_running {
             self.sync_run();
         }
     }
@@ -193,8 +194,8 @@ impl App {
 
     /// Running while walking there, besides "Always run" and a double-tap
     /// run (SetAlwaysRun is one state for all three).
-    fn sync_run(&mut self) {
-        let run = self.running();
+    pub(super) fn sync_run(&mut self) {
+        let run = self.commanded_run();
         self.send(NetCommand::SetAlwaysRun(run));
     }
 
@@ -209,10 +210,13 @@ impl App {
         let mut pilot = AutoPilot::avatar(agent.position, target.position, follow.then_some(id), agent.flying, Instant::now());
         pilot.subject = Some(id);
         if follow {
-            pilot.set_follow_distance(self.settings.follow.bounded_distance(), agent.position);
+            pilot.set_follow_settings(self.settings.follow, agent.position);
         }
+        self.world.facing.stop();
         pilot.observe_avatar(target, agent.position);
+        pilot.constrain_follow_run(!(self.world.rlva.has("alwaysrun") || self.world.rlva.has("temprun")));
         self.stop_autopilot(true);
+        let was_running = self.commanded_run();
         self.world.following_avatar = pilot.leader;
         if follow {
             ui::widgets::open_floater(&self.egui_ctx, "follow", &mut self.follow_ui.open);
@@ -221,7 +225,7 @@ impl App {
         self.autopilot_stop_pending = false;
         self.autopilot_flags = 0;
         self.release_native_movelock();
-        if self.autopilot.as_ref().is_some_and(|ap| ap.run) {
+        if self.commanded_run() != was_running {
             self.sync_run();
         }
     }
@@ -230,7 +234,7 @@ impl App {
     /// those synthesized movement bits before sending/predicting controls,
     /// retaining the pilot's exact slow/fast/stop request.
     pub(super) fn autopilot_controls(&self, mut flags: u32) -> u32 {
-        if self.autopilot.is_some() {
+        if self.autopilot.as_ref().is_some_and(|ap| ap.controls_active()) {
             flags &= !(control::AT_POS
                 | control::AT_NEG
                 | control::FAST_AT
@@ -256,7 +260,7 @@ impl App {
         };
         self.autopilot_flags = control::STOP;
         self.autopilot_stop_pending = true;
-        if ap.run {
+        if ap.run || ap.leader.is_some() {
             self.sync_run();
         }
         if let Some(arrival) = ap.on_arrival {
@@ -284,6 +288,14 @@ impl App {
             0
         };
         if self.autopilot.is_none() && self.follow_recovery.is_none() {
+            return;
+        }
+        // A retained paused/blocked target releases manual controls. Moving
+        // while paused must not lose the target or restart the pilot.
+        if self.autopilot.as_ref().is_some_and(|ap| !ap.controls_active()) {
+            if !self.in_world() && !self.world.teleporting {
+                self.stop_autopilot(true);
+            }
             return;
         }
         let i = &self.input;
@@ -316,23 +328,42 @@ impl App {
             return;
         }
         let (position, yaw) = (self.world.agent.position, self.world.agent.yaw);
-        let was_running = self.running();
+        let was_running = self.commanded_run();
         if let Some(id) = self.autopilot.as_ref().and_then(|ap| ap.subject) {
             let Some(target) = autopilot::avatar_target(&self.world, id, self.pelvis_to_foot() * 2.0) else {
-                self.stop_autopilot(true);
+                if let Some(ap) = &mut self.autopilot
+                    && ap.leader.is_some()
+                {
+                    ap.hold_follow(autopilot::FollowStatus::TargetUnavailable, position);
+                    self.autopilot_flags = control::STOP;
+                    if self.commanded_run() != was_running {
+                        self.sync_run();
+                    }
+                } else {
+                    self.stop_autopilot(true);
+                }
                 return;
             };
             if let Some(ap) = &mut self.autopilot {
                 ap.observe_avatar(target, position);
+                ap.constrain_follow_run(!(self.world.rlva.has("alwaysrun") || self.world.rlva.has("temprun")));
             }
         }
-        if self.running() != was_running {
+        if self.commanded_run() != was_running {
             self.sync_run();
         }
         if !self.world.agent.flying && self.autopilot.as_ref().is_some_and(|ap| ap.wants_flight()) {
             if !autopilot::can_takeoff(&self.world) {
                 log::info!("autopilot: taking off is not permitted, stopped");
-                self.stop_autopilot(true);
+                if let Some(ap) = &mut self.autopilot
+                    && ap.leader.is_some()
+                {
+                    ap.hold_follow(autopilot::FollowStatus::FlightBlocked, position);
+                    self.autopilot_flags = control::STOP;
+                    self.sync_run();
+                } else {
+                    self.stop_autopilot(true);
+                }
                 return;
             }
             self.release_native_movelock();
@@ -354,7 +385,7 @@ impl App {
         let calibration = &self.world.agent.prediction.calibration;
         let response = autopilot::flight_response(calibration, rtt, self.world.agent.server_age());
         let step = ap.step_moving(steering, self.world.agent.velocity, yaw, dt.clamp(1e-3, 0.1), response);
-        let run = ap.run;
+        let run = ap.run && !(ap.leader.is_some() && (self.world.rlva.has("alwaysrun") || self.world.rlva.has("temprun")));
         self.world.agent.yaw += step.yaw;
         self.autopilot_flags = step.flags;
         if let Some(finish) = step.finish {
@@ -363,6 +394,14 @@ impl App {
                     return;
                 }
                 log::info!("autopilot: no nearer for too long, stopped");
+                if let Some(ap) = &mut self.autopilot
+                    && ap.leader.is_some()
+                {
+                    ap.hold_follow(autopilot::FollowStatus::Blocked, position);
+                    self.autopilot_flags = control::STOP;
+                    self.sync_run();
+                    return;
+                }
             }
             self.stop_autopilot(false);
         } else if self.demo {
@@ -561,6 +600,7 @@ impl App {
             self.settings.follow = autopilot::FollowSettings {
                 distance: if mode == "controls-distance" { 6.0 } else { 2.0 },
                 teleport_if_stuck: matches!(mode.as_str(), "stuck-teleport" | "stuck-denied"),
+                ..Default::default()
             };
             if mode == "stuck-denied" {
                 self.settings.rlva_enabled = true;

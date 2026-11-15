@@ -2114,7 +2114,7 @@ ui-worldmap-center-map-on-my-position = マップの中心を現在地にする
 build-ui-object-circle = 円形
 ui-contacts-contact-sets = コンタクトセット
 contacts-import = コンタクトセットをインポート…
-contacts-import-hint = レガシービューアのアカウントフォルダからsettings_friends_groups.xml、またはエクスポートしたコンタクトセットを選択してください。メンバーは統合され、既存の色とニックネームは保持されます。
+contacts-import-hint = 共有されたセットまたは旧ビューアーのXMLファイルを読み込み前に確認します。
 contacts-import-file-type = コンタクトセット（ＸＭＬ）
 contacts-import-success = コンタクトセットをインポートしました（{ $count }件）。既存のメンバー、色、ニックネームは保持されました。
 contacts-import-failed = コンタクトセットをインポートできませんでした。有効なコンタクトセットのＸＭＬファイル（１６ＭｉＢ以下）を選択し、アカウント設定フォルダに書き込めるか確認してください。連絡先は保持されています。
@@ -5962,7 +5962,7 @@ common-follow = 追従
 follow-title = 追従中
 follow-distance = 目標までの距離
 follow-teleport-if-stuck = 動けなくなったらテレポート
-follow-teleport-if-stuck-tip = 進めなくなったとき、目標の横にテレポートして追従を再開します。オフの場合は追従を停止します。
+follow-teleport-if-stuck-tip = 移動が妨げられたら、相手の近くへのテレポートを試みて追従を再開します。無効または利用できない場合は、移動不可の状態で一時停止します。
 follow-recovering = テレポート後に再開しています…
 ui-context-go-to-avatar = 移動
 ui-context-stop-following = 追従を停止
@@ -13896,3 +13896,67 @@ ui-options-attached-particles-hint = アバターが装着しているものの�
 # Preferences › Graphics: progressive draw distance (FSRenderFarClipStepping)
 ui-options-draw-distance-stepping = 描画距離を段階的に広げる
 ui-options-draw-distance-stepping-hint = ログイン後と別のリージョンへのテレポート後、描画距離を32mから始めて設定値まで倍々に広げ、近くのものから読み込みます。
+
+group-contacts-select-all = コンタクトセット用に全員を選択
+
+contacts-share-export = 選択したセットを書き出す…
+
+contacts-share-exported = セットを書き出しました。セット名とメンバーのIDのみが含まれます。
+
+contacts-share-export-failed = 書き出せませんでした。保存先に書き込みできるか確認してください。
+
+contacts-share-preview = コンタクトセットの読み込み — プレビュー
+
+contacts-share-preserve = 読み込み前に各セットを確認してください。既存のメンバーとローカル設定は保持されます。ファイル内のメモや別名は読み込みません。
+
+contacts-share-new = 新しいセットを作成
+
+contacts-share-merge = 既存のセットに統合
+
+contacts-share-name = 新しいセット名
+
+contacts-share-counts = メンバー { $members } 人 · 追加 { $added } 人 · 登録済み { $duplicates } 人
+
+contacts-share-invalid = セットを選択してください。新しい名前は未使用で、各セットの読み込み先は別々にする必要があります。
+
+contacts-share-apply = 選択したセットを読み込む
+
+contacts-names-loading = 名前の取得済み：{ $known } / { $total } · 順次読み込み中…
+
+contacts-compare-show = メンバーを比較…
+contacts-compare-hide = 比較を閉じる
+contacts-compare-added = 共有ファイルの新規メンバー
+contacts-compare-common = 両方に登録済み
+contacts-compare-local = ローカルセットのみに登録
+contacts-compare-retained = ローカルのみに登録：{ $count } 人 · マージ時も保持
+contacts-compare-local-help = このファイルにいないメンバーも、ローカルセットには残ります。グループを脱退したという意味ではありません。
+contacts-compare-results = { $total } 人中 { $shown } 人
+contacts-compare-empty = 一致するメンバーはいません。
+
+follow-mode-walk = 歩行のみ
+follow-mode-auto = 自動
+follow-mode-run = 走行を許可
+follow-movement = 地上での移動
+follow-mode-tip = 自動は相手の走行に合わせます。走行を許可すると、離れた相手に走って追いつきます。歩行のみでは走りません。一時停止・停止中は通常の走行設定に戻ります。
+follow-preset-close = 近く（1 m）
+follow-preset-companion = 同行（3 m）
+follow-preset-trail = 後方（6 m）
+follow-pause = 追従を一時停止
+follow-resume = 追従を再開
+follow-status-active = 追従中
+follow-status-nearby = 設定した距離内
+follow-status-paused = 一時停止中 · 手動で移動してから再開できます。
+follow-status-missing = 相手を確認できません · 近くに戻ったら再開してください。
+follow-status-blocked = 移動が妨げられています · 再開で再試行します。
+follow-status-flight = ここでは飛行できません · 状況が変わったら再開してください。
+
+facing-selected = 選択したアバターの方を向く
+facing-keep = このアバターの方を向き続ける
+facing-stop = 向き続けるのを停止
+facing-title = 継続して相手の方を向く
+facing-active = このアバターの方を向き続けています。
+facing-waiting = このアバターが再び近くに現れるのを待っています。
+facing-paused = 着席中、または移動が制限されているため一時停止中です。
+facing-unavailable = このアバターの方を向けません。立ち上がり、マウスルックを解除して、相手が近くにいることを確認してください。
+facing-no-nearby = 近くに、位置を確認できるアバターがいません。
+facing-keep-tip = 最も近くの読み込み済みアバターを選び、その人の方を向き続けます。再クリックで停止します。アバターメニューから相手を選ぶこともできます。

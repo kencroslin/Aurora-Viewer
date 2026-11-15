@@ -110,7 +110,8 @@ pub const COMMANDS: &[Command] = commands![
     "360capture", "panorama-horizontal-filled", "toolbar-command-360-snapshot", false;
     "omnifilter", "filter-filled", "toolbar-command-omnifilter", false;
     "avatar_align", "user-scan", "toolbar-command-avatar-align", false;
-    "face_nearest_avatar", "user-search", "toolbar-command-face-nearest", false;
+    "face_nearest_avatar", "user-search", "toolbar-command-face-nearest", true;
+    "keep_facing_avatar", "user-scan", "facing-keep", true;
 ];
 
 impl Command {

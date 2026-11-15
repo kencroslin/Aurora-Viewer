@@ -235,6 +235,8 @@ pub struct Facts {
     pub worn: bool,
     pub avatar_travel: bool,
     pub following: bool,
+    pub avatar_face: bool,
+    pub facing: bool,
     /// Removable clothing types and occupied attachment points in our outfit.
     pub removable_clothing: Vec<u8>,
     pub removable_points: Vec<u8>,
@@ -273,6 +275,9 @@ pub enum CtxAction {
     SitAt(Vec3),
     SitStand,
     LookAtAvatar(Uuid),
+    FaceAvatar(Uuid),
+    KeepFacingAvatar(Uuid),
+    StopFacing,
     EditPbr(Uuid),
     ObjectProfile(Uuid),
     Pathfinding {
@@ -557,24 +562,29 @@ pub enum CtxAction {
 /// (menu_fs_contacts_friends.xml, LLAvatarActions::addToContactSet: the
 /// sets of FSFloaterAddToContactSet's list and its "+", AddNewContactSet).
 pub fn contact_set_submenu(ui: &mut egui::Ui, p: &Palette, world: &World, ids: &[Uuid], label: &str) {
-    let sets = world.contact_sets.set_names();
     menu::submenu(ui, p, "users-group", label, !ids.is_empty(), |ui| {
-        if sets.is_empty() {
-            menu::item_if(ui, p, "users-group", aurora_i18n::tr!("ui-contacts-no-contact-sets"), false);
-        }
-        for set in sets {
-            if menu::item(ui, p, "users-group", &set) {
-                request(
-                    ui.ctx(),
-                    CtxAction::ContactSet(crate::ui::contacts::SetEdit::Add { set, ids: ids.to_vec() }),
-                );
-            }
-        }
-        menu::separator(ui, p);
-        if menu::item(ui, p, "plus", aurora_i18n::tr!("ui-context-new-contact-set")) {
-            request(ui.ctx(), CtxAction::NewContactSet(ids.to_vec()));
-        }
+        contact_set_choices(ui, p, world, ids);
     });
+}
+
+/// Shared choices for a contact-set submenu or a list's Add button.
+pub fn contact_set_choices(ui: &mut egui::Ui, p: &Palette, world: &World, ids: &[Uuid]) {
+    let sets = world.contact_sets.set_names();
+    if sets.is_empty() {
+        menu::item_if(ui, p, "users-group", aurora_i18n::tr!("ui-contacts-no-contact-sets"), false);
+    }
+    for set in sets {
+        if menu::item_if(ui, p, "users-group", &set, !ids.is_empty()) {
+            request(
+                ui.ctx(),
+                CtxAction::ContactSet(crate::ui::contacts::SetEdit::Add { set, ids: ids.to_vec() }),
+            );
+        }
+    }
+    menu::separator(ui, p);
+    if menu::item_if(ui, p, "plus", aurora_i18n::tr!("ui-context-new-contact-set"), !ids.is_empty()) {
+        request(ui.ctx(), CtxAction::NewContactSet(ids.to_vec()));
+    }
 }
 
 /// egui temp data: actions chosen in menus this frame.
@@ -849,6 +859,28 @@ fn avatar_menu_reporting(
         }
     };
     let navigation = |ui: &mut egui::Ui| {
+        let face = crate::world::facing::target_yaw(world, id).is_some();
+        if menu::item_if(ui, p, "user-scan", aurora_i18n::tr!("facing-selected"), face) {
+            act(CtxAction::FaceAvatar(id));
+        }
+        let locked = world.facing.target == Some(id);
+        if menu::item_if(
+            ui,
+            p,
+            "user-search",
+            if locked {
+                aurora_i18n::tr!("facing-stop")
+            } else {
+                aurora_i18n::tr!("facing-keep")
+            },
+            face || locked,
+        ) {
+            act(if locked {
+                CtxAction::StopFacing
+            } else {
+                CtxAction::KeepFacingAvatar(id)
+            });
+        }
         if menu::item_if(ui, p, "walk", aurora_i18n::tr!("ui-context-go-to-avatar"), travel) {
             act(CtxAction::GoToAvatar(id));
         }

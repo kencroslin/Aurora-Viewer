@@ -624,6 +624,26 @@ fn attachment_self_menu(ui: &mut Builder, f: &Facts, key: ObjKey) {
 
 fn avatar_navigation(ui: &mut Builder, f: &Facts, id: Uuid) {
     ui.item_if(
+        "user-scan",
+        aurora_i18n::tr!("facing-selected"),
+        f.avatar_face,
+        CtxAction::FaceAvatar(id),
+    );
+    ui.item_if(
+        "user-search",
+        if f.facing {
+            aurora_i18n::tr!("facing-stop")
+        } else {
+            aurora_i18n::tr!("facing-keep")
+        },
+        f.avatar_face || f.facing,
+        if f.facing {
+            CtxAction::StopFacing
+        } else {
+            CtxAction::KeepFacingAvatar(id)
+        },
+    );
+    ui.item_if(
         "walk",
         aurora_i18n::tr!("ui-context-go-to-avatar"),
         f.avatar_travel,
@@ -1573,6 +1593,8 @@ mod tests {
             let f = Facts::default();
             let mut expected = tr(&[
                 "common-view-profile",
+                "facing-selected",
+                "facing-keep",
                 "ui-context-go-to-avatar",
                 "common-follow",
                 "common-become-friends",
@@ -2227,5 +2249,44 @@ mod rlva_sit_tests {
         assert!(!enabled(world_menu(&land, &f, Vec3::ZERO), aurora_i18n::tr!("ui-context-sit-here")));
         f.ground_sit_blocked = false;
         assert!(enabled(world_menu(&land, &f, Vec3::ZERO), aurora_i18n::tr!("ui-context-sit-here")));
+    }
+    #[test]
+    fn facing_avatar_entries_dispatch_selected_identity_and_keep_stop_available_when_missing() {
+        let id = Uuid::from_u128(7);
+        for attachment in [None, Some(Uuid::from_u128(8))] {
+            let target = Target::Avatar {
+                id,
+                own: false,
+                attachment,
+            };
+            let mut facts = Facts {
+                avatar_face: true,
+                ..Default::default()
+            };
+            let entries = world_menu(&target, &facts, Vec3::ZERO);
+            assert!(
+                entries
+                    .iter()
+                    .any(|e| e.enabled && matches!(e.kind, Kind::Action(CtxAction::FaceAvatar(who)) if who == id))
+            );
+            assert!(
+                entries
+                    .iter()
+                    .any(|e| e.enabled && matches!(e.kind, Kind::Action(CtxAction::KeepFacingAvatar(who)) if who == id))
+            );
+            facts.avatar_face = false;
+            facts.facing = true;
+            let entries = world_menu(&target, &facts, Vec3::ZERO);
+            assert!(
+                entries
+                    .iter()
+                    .any(|e| e.enabled && matches!(e.kind, Kind::Action(CtxAction::StopFacing)))
+            );
+            assert!(
+                entries
+                    .iter()
+                    .any(|e| !e.enabled && matches!(e.kind, Kind::Action(CtxAction::FaceAvatar(_))))
+            );
+        }
     }
 }

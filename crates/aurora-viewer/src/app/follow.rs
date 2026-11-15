@@ -34,15 +34,56 @@ impl App {
             .world
             .person_name(&id)
             .unwrap_or_else(|| aurora_i18n::tr!("common-follow").into());
-        let actions = self
-            .follow_ui
-            .show(ctx, p, &name, self.follow_recovery.is_some(), &mut self.settings.follow);
+        let status = if self.follow_recovery.is_some() {
+            autopilot::FollowStatus::Recovering
+        } else {
+            self.autopilot
+                .as_ref()
+                .map_or(autopilot::FollowStatus::TargetUnavailable, |ap| ap.follow_status())
+        };
+        let actions = self.follow_ui.show(ctx, p, &name, status, &mut self.settings.follow);
+        let was_running = self.commanded_run();
         if actions.stop {
             self.stop_autopilot(true);
-        } else if actions.changed
-            && let Some(ap) = &mut self.autopilot
-        {
-            ap.set_follow_distance(self.settings.follow.distance, self.world.agent.position);
+        } else {
+            let position = self.world.agent.position;
+            if actions.changed
+                && let Some(ap) = &mut self.autopilot
+            {
+                ap.set_follow_settings(self.settings.follow, position);
+            }
+            if actions.pause
+                && let Some(ap) = &mut self.autopilot
+            {
+                ap.hold_follow(autopilot::FollowStatus::Paused, position);
+                self.autopilot_flags = aurora_net::control::STOP;
+                self.autopilot_stop_pending = true;
+            }
+            if actions.resume {
+                self.world.facing.stop();
+                let target = autopilot::avatar_target(&self.world, id, self.pelvis_to_foot() * 2.0);
+                let seated = self.native_anchor.blocks_walk(self.world.agent.seated, self.world.agent.ground_sit);
+                let resume_allowed = target.is_some() && !seated;
+                if let Some(ap) = &mut self.autopilot {
+                    if seated {
+                        ap.hold_follow(autopilot::FollowStatus::Blocked, position);
+                    } else if let Some(target) = target {
+                        ap.set_flying(self.world.agent.flying, position);
+                        ap.set_follow_settings(self.settings.follow, position);
+                        ap.resume_follow(position);
+                        ap.observe_avatar(target, position);
+                        ap.constrain_follow_run(!(self.world.rlva.has("alwaysrun") || self.world.rlva.has("temprun")));
+                    } else {
+                        ap.hold_follow(autopilot::FollowStatus::TargetUnavailable, position);
+                    }
+                }
+                if resume_allowed {
+                    self.release_native_movelock();
+                }
+            }
+            if self.commanded_run() != was_running {
+                self.sync_run();
+            }
         }
         if actions.save {
             self.settings.save();

@@ -14,6 +14,7 @@ use crate::ui::place_details::Ctx;
 use crate::ui::widgets::{self, ActionKind};
 use aurora_net::groups::{BuiltinRole, GroupMember, LastSeen, RoleChange, powers};
 use egui::{FontId, Pos2, Rect, Sense, Vec2};
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 /// Which members the list shows.
@@ -45,6 +46,11 @@ pub struct MembersState {
     pub selected: Option<Uuid>,
     /// The members ticked for the management's actions (with the abilities).
     pub checked: Vec<Uuid>,
+    /// Local contact actions, independent of the administrative checkboxes.
+    contacts: BTreeSet<Uuid>,
+    contact_anchor: Option<Uuid>,
+    /// Retain a recent list focus through a discarded window sizing pass.
+    contact_focus_frame: Option<u64>,
     /// Role changes waiting for "Save".
     pub staged: Vec<RoleChange>,
     /// A management action waiting for its confirmation.
@@ -68,8 +74,57 @@ pub enum Confirm {
 }
 
 impl MembersState {
-    /// The members the actions apply to: those ticked, else the one chosen.
+    /// Select loaded, filtered rows only; never change management targets.
+    fn select_contacts_all(&mut self) {
+        self.contacts = self.rows.iter().map(|(id, _)| *id).collect();
+        self.contact_anchor = self.rows.first().map(|(id, _)| *id);
+    }
+
+    fn retain_contacts(&mut self) {
+        let shown: BTreeSet<Uuid> = self.rows.iter().map(|(id, _)| *id).collect();
+        self.contacts.retain(|id| shown.contains(id));
+        if self.contact_anchor.is_some_and(|id| !shown.contains(&id)) {
+            self.contact_anchor = None;
+        }
+    }
+
+    fn click_contact(&mut self, id: Uuid, mods: egui::Modifiers) {
+        if mods.shift
+            && let Some(a) = self
+                .contact_anchor
+                .and_then(|anchor| self.rows.iter().position(|(id, _)| *id == anchor))
+            && let Some(b) = self.rows.iter().position(|(row, _)| *row == id)
+        {
+            if !mods.command {
+                self.contacts.clear();
+            }
+            self.contacts.extend(self.rows[a.min(b)..=a.max(b)].iter().map(|(id, _)| *id));
+        } else {
+            if mods.command {
+                if !self.contacts.remove(&id) {
+                    self.contacts.insert(id);
+                }
+            } else {
+                self.contacts = BTreeSet::from([id]);
+            }
+            self.contact_anchor = Some(id);
+        }
+    }
+
+    fn contact_menu_targets(&mut self, id: Uuid) -> Vec<Uuid> {
+        if !self.contacts.contains(&id) {
+            self.contacts = BTreeSet::from([id]);
+            self.contact_anchor = Some(id);
+        }
+        self.contacts.iter().copied().collect()
+    }
+
+    /// Management is unavailable during a bulk contact selection. Its
+    /// explicit checkboxes resume it without inheriting the contact list.
     pub fn targets(&self) -> Vec<Uuid> {
+        if self.contacts.len() > 1 {
+            return Vec::new();
+        }
         if self.checked.is_empty() {
             self.selected.into_iter().collect()
         } else {
@@ -456,9 +511,13 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
             c.want_names
                 .extend(d.members.keys().filter(|id| world.social.display_name_of(id) == "…"));
         }
+        st.members.retain_contacts();
         st.members.made = Some(key);
         st.members.made_at = env.now;
     }
+
+    contact_select_all(ui, p, &mut st.members, v.id);
+    ui.add_space(4.0);
 
     // the columns: name, title, (roles), status, (donation), left of the
     // list's scroll bar
@@ -541,6 +600,8 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
     };
     let footer_h = 44.0;
     let list_h = (ui.available_height() - footer_h).max(ROW_H * 2.0);
+    let list_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(width + tick_w, list_h));
+    contact_keyboard(ui, &mut st.members, list_rect, v.id);
     let today = today();
     let count = st.members.rows.len();
     let mut open_profile = None;
@@ -556,7 +617,9 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
                 let (id, name) = st.members.rows[i].clone();
                 let Some(m) = d.members.get(&id) else { continue };
                 let (row, resp) = ui.allocate_exact_size(Vec2::new(width + tick_w, ROW_H), Sense::click());
-                let selected = st.members.selected == Some(id) || st.members.checked.contains(&id);
+                let selected = st.members.contacts.contains(&id)
+                    || (st.members.contacts.is_empty() && st.members.selected == Some(id))
+                    || st.members.checked.contains(&id);
                 if selected {
                     ui.painter().rect_filled(row, 0.0, p.violet.gamma_multiply(0.16));
                 } else if resp.hovered() {
@@ -565,15 +628,19 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
                 ui.painter()
                     .hline(row.x_range(), row.top(), egui::Stroke::new(1.0, p.raised.gamma_multiply(0.3)));
                 if resp.clicked() {
+                    request_contact_focus(ui.ctx(), &mut st.members, v.id);
+                    let mods = ui.input(|i| i.modifiers);
+                    st.members.click_contact(id, mods);
                     st.members.selected = Some(id);
-                    // Ctrl adds to the ticks, a plain click starts them again
-                    if manage {
-                        if ui.input(|i| i.modifiers.command) {
-                            toggle(&mut st.members.checked, id);
-                        } else {
-                            st.members.checked = vec![id];
-                        }
+                    // Multi-selection is for contacts; only a plain click or
+                    // an explicit checkbox changes the management selection.
+                    if manage && !mods.command && !mods.shift {
+                        st.members.checked = vec![id];
                     }
+                }
+                if resp.secondary_clicked() {
+                    request_contact_focus(ui.ctx(), &mut st.members, v.id);
+                    st.members.contact_menu_targets(id);
                 }
                 if manage {
                     let tick = Rect::from_min_size(row.min, Vec2::new(tick_w, ROW_H));
@@ -591,11 +658,13 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
                             color,
                         );
                     }
-                    if ui
-                        .interact(tick, ui.scope_id().with(("group_member_tick", id)), Sense::click())
-                        .clicked()
-                    {
+                    let tick_response = ui.interact(tick, egui::Id::unique(("group_member_tick", v.id, id)), Sense::click());
+                    tick_response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), on, &name));
+                    if tick_response.clicked() {
+                        request_contact_focus(ui.ctx(), &mut st.members, v.id);
                         toggle(&mut st.members.checked, id);
+                        st.members.contacts = BTreeSet::from([id]);
+                        st.members.contact_anchor = Some(id);
                         st.members.selected = Some(id);
                     }
                 }
@@ -603,7 +672,12 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
                     open_profile = Some(id);
                 }
                 crate::ui::menu::context_menu(&resp, p, |ui| {
-                    context::avatar_list_menu(ui, p, c.world, id, context::AvatarList::Name);
+                    let ids = st.members.contact_menu_targets(id);
+                    if ids.len() > 1 {
+                        context::avatars_menu(ui, p, c.world, &ids);
+                    } else {
+                        context::avatar_list_menu(ui, p, c.world, id, context::AvatarList::Name);
+                    }
                 });
                 let mut x = row.left() + tick_w;
                 let mut col = 0;
@@ -697,8 +771,8 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 5.0;
         let selected = (targets.len() == 1).then(|| targets[0]);
-        let text = if !targets.is_empty() {
-            aurora_i18n::tr!("ui-group-admin-selected", count = targets.len() as i64)
+        let text = if !st.members.contacts.is_empty() {
+            aurora_i18n::tr!("ui-group-admin-selected", count = st.members.contacts.len() as i64)
         } else {
             aurora_i18n::tr!(
                 "ui-group-profile-shown",
@@ -709,6 +783,7 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
         ui.label(egui::RichText::new(text).size(12.0).color(p.muted));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let size = Vec2::new(0.0, 28.0);
+            contact_add_button(ui, p, c.world, &st.members);
             // Eject / Ban with the abilities (handleMemberSelect's rules)
             if v.can(powers::GROUP_BAN_ACCESS)
                 && widgets::action_button_if(
@@ -769,6 +844,107 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
             }
         });
     });
+}
+
+/// Both group layouts use the same bulk contact-set choices.
+fn contact_add_button(ui: &mut egui::Ui, p: &Palette, world: &crate::world::World, members: &MembersState) {
+    let add = widgets::action_button_if(
+        ui,
+        p,
+        "users-group",
+        aurora_i18n::tr!("ui-context-add-to-contact-set"),
+        ActionKind::Flat,
+        Vec2::new(0.0, 28.0),
+        !members.contacts.is_empty(),
+    );
+    crate::ui::menu::dropdown(&add, p, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+        let ids: Vec<Uuid> = members.contacts.iter().copied().collect();
+        context::contact_set_choices(ui, p, world, &ids);
+    });
+}
+
+fn contact_focus_id(group: Uuid) -> egui::Id {
+    egui::Id::unique(("group_member_contact_selection", group))
+}
+
+fn request_contact_focus(ctx: &egui::Context, members: &mut MembersState, group: Uuid) {
+    ctx.memory_mut(|m| m.request_focus(contact_focus_id(group)));
+    members.contact_focus_frame = Some(ctx.cumulative_frame_nr());
+}
+
+/// Explicit local contact selection; the administration ticks stay separate.
+fn contact_select_all(ui: &mut egui::Ui, p: &Palette, members: &mut MembersState, group: Uuid) {
+    let mut all = !members.rows.is_empty() && members.contacts.len() == members.rows.len();
+    let mixed = !all && !members.contacts.is_empty();
+    let response = ui
+        .add_enabled_ui(!members.rows.is_empty(), |ui| {
+            widgets::checkbox_mixed(ui, p, &mut all, aurora_i18n::tr!("group-contacts-select-all"), mixed)
+        })
+        .inner;
+    if response.changed() {
+        if all {
+            members.select_contacts_all();
+        } else {
+            members.contacts.clear();
+            members.contact_anchor = None;
+        }
+        request_contact_focus(ui.ctx(), members, group);
+    }
+}
+
+/// A stable list target survives scroll/sizing passes and checkbox clicks.
+/// Text fields, other windows, Tab, Escape and clicks outside keep their keys.
+fn contact_keyboard(ui: &mut egui::Ui, members: &mut MembersState, rect: Rect, group: Uuid) -> egui::Response {
+    let id = contact_focus_id(group);
+    let response = ui.interact(rect, id, Sense::click());
+    let leaving = ui.input(|i| {
+        i.pointer.any_pressed() && i.pointer.interact_pos().is_none_or(|pos| !rect.contains(pos))
+            || i.key_pressed(egui::Key::Tab)
+            || i.key_pressed(egui::Key::Escape)
+    });
+    if leaving {
+        members.contact_focus_frame = None;
+    }
+    let allowed = ui.is_enabled()
+        && !egui::Popup::is_any_open(ui.ctx())
+        && ui.memory(|m| m.allows_interaction(ui.layer_id()))
+        && !ui.ctx().text_edit_focused();
+    let restore = allowed
+        && !leaving
+        && members
+            .contact_focus_frame
+            .is_some_and(|frame| ui.ctx().cumulative_frame_nr() <= frame + 1)
+        && ui.memory(|m| m.focused().is_none());
+    if allowed && (response.clicked() || response.has_focus() || restore) {
+        request_contact_focus(ui.ctx(), members, group);
+    }
+    if allowed && ui.memory(|m| m.has_focus(id)) {
+        let select = ui.input_mut(|i| {
+            let mut select = false;
+            i.events.retain(|event| {
+                if let egui::Event::Key {
+                    key: egui::Key::A,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = event
+                    && (modifiers.command || modifiers.ctrl)
+                    && !modifiers.shift
+                    && !modifiers.alt
+                {
+                    select = true;
+                    false
+                } else {
+                    true
+                }
+            });
+            select
+        });
+        if select {
+            members.select_contacts_all();
+        }
+    }
+    response
 }
 
 /// The chosen members' roles: ticked as they are (and as the waiting
@@ -1030,27 +1206,56 @@ pub fn classic_list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, v: 
     for id in rows.iter().map(|(id, _)| id).filter(|id| world.social.display_name_of(id) == "…") {
         c.want_names.insert(*id);
     }
+    if st.members.rows != rows {
+        st.members.rows = rows;
+        st.members.retain_contacts();
+    }
+    // The modern layout must rebuild its own sort/filter plan after a switch.
+    st.members.made = None;
     let today = today();
     let width = widgets::scrolled_width(ui);
+    contact_select_all(ui, p, &mut st.members, v.id);
+    let rect = Rect::from_min_size(ui.cursor().min, Vec2::new(width, 260.0));
+    contact_keyboard(ui, &mut st.members, rect, v.id);
     egui::ScrollArea::vertical()
         .id_salt("group_members_classic")
         .max_height(260.0)
         .auto_shrink([false, true])
-        .show_rows(ui, 22.0, rows.len(), |ui, range| {
+        .show_rows(ui, 22.0, st.members.rows.len(), |ui, range| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            for (id, name) in &rows[range] {
-                let Some(m) = d.members.get(id) else { continue };
+            for i in range {
+                let (id, name) = st.members.rows[i].clone();
+                let Some(m) = d.members.get(&id) else { continue };
                 let (row, resp) = ui.allocate_exact_size(Vec2::new(width, 22.0), Sense::click());
-                if resp.hovered() {
+                if st.members.contacts.contains(&id) {
+                    ui.painter().rect_filled(row, 0.0, p.violet.gamma_multiply(0.16));
+                } else if resp.hovered() {
                     ui.painter().rect_filled(row, 0.0, p.raised.gamma_multiply(0.35));
                 }
-                if resp.double_clicked() {
-                    context::request(ui.ctx(), CtxAction::Profile(*id));
+                if resp.clicked() {
+                    request_contact_focus(ui.ctx(), &mut st.members, v.id);
+                    st.members.click_contact(id, ui.input(|i| i.modifiers));
+                    st.members.selected = Some(id);
                 }
+                if resp.secondary_clicked() {
+                    request_contact_focus(ui.ctx(), &mut st.members, v.id);
+                    st.members.contact_menu_targets(id);
+                }
+                if resp.double_clicked() {
+                    context::request(ui.ctx(), CtxAction::Profile(id));
+                }
+                crate::ui::menu::context_menu(&resp, p, |ui| {
+                    let ids = st.members.contact_menu_targets(id);
+                    if ids.len() > 1 {
+                        context::avatars_menu(ui, p, world, &ids);
+                    } else {
+                        context::avatar_list_menu(ui, p, world, id, context::AvatarList::Name);
+                    }
+                });
                 let third = row.width() / 3.0;
                 widgets::paint_elided(
                     ui,
-                    name,
+                    &name,
                     Pos2::new(row.left() + 4.0, row.center().y),
                     third - 8.0,
                     FontId::proportional(12.0),
@@ -1076,4 +1281,131 @@ pub fn classic_list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, v: 
                 );
             }
         });
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(aurora_i18n::tr!(
+                "ui-group-admin-selected",
+                count = st.members.contacts.len() as i64
+            ))
+            .size(12.0)
+            .color(p.muted),
+        );
+        contact_add_button(ui, p, world, &st.members);
+    });
+}
+
+#[cfg(test)]
+mod contact_selection_tests {
+    use super::*;
+
+    fn members(count: u128) -> MembersState {
+        MembersState {
+            rows: (1..=count).map(|n| (Uuid::from_u128(n), format!("Member {n}"))).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn group_contacts_select_all_5000_does_not_expand_management_targets() {
+        let mut state = members(5000);
+        state.selected = Some(Uuid::from_u128(1));
+        state.checked = vec![Uuid::from_u128(2)];
+        state.select_contacts_all();
+        assert_eq!(state.contacts.len(), 5000);
+        assert!(
+            state.targets().is_empty(),
+            "bulk contact selection cannot activate management actions"
+        );
+        assert_eq!(state.checked, [Uuid::from_u128(2)]);
+        state.rows.retain(|(id, _)| id.as_u128() % 2 == 0);
+        state.retain_contacts();
+        assert_eq!(state.contacts.len(), 2500, "filtered-out members cannot be added accidentally");
+        state.select_contacts_all();
+        assert_eq!(state.contacts.len(), 2500);
+        assert!(
+            state.targets().is_empty(),
+            "bulk contact selection cannot activate management actions"
+        );
+        assert_eq!(state.checked, [Uuid::from_u128(2)]);
+        state.rows.clear();
+        state.retain_contacts();
+        state.select_contacts_all();
+        assert!(state.contacts.is_empty());
+    }
+
+    #[test]
+    fn group_contacts_click_range_and_context_menu_preserve_the_intended_members() {
+        let mut state = members(5);
+        let id = Uuid::from_u128;
+        state.click_contact(id(2), egui::Modifiers::NONE);
+        state.click_contact(id(4), egui::Modifiers::SHIFT);
+        assert_eq!(state.contacts, BTreeSet::from([id(2), id(3), id(4)]));
+        state.click_contact(id(3), egui::Modifiers::COMMAND);
+        assert_eq!(state.contacts, BTreeSet::from([id(2), id(4)]));
+        assert_eq!(state.contact_menu_targets(id(2)), vec![id(2), id(4)]);
+        assert_eq!(state.contact_menu_targets(id(5)), vec![id(5)]);
+        assert!(state.targets().is_empty(), "contact actions do not select administrative targets");
+    }
+
+    fn frame(ctx: &egui::Context, state: &mut MembersState, text: &mut String, events: Vec<egui::Event>) -> (egui::Id, egui::Id) {
+        let mut ids = None;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                let field = ui.add(egui::TextEdit::singleline(text));
+                let rect = Rect::from_min_size(ui.cursor().min, Vec2::new(500.0, 300.0));
+                let list = contact_keyboard(ui, state, rect, Uuid::from_u128(9));
+                ids = Some((field.id, list.id));
+            },
+        );
+        output.textures_delta.clear();
+        ids.expect("rendered fields")
+    }
+
+    fn select_all_key(modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn group_contacts_command_a_belongs_to_the_focused_list_or_text_field() {
+        for modifiers in [
+            egui::Modifiers {
+                command: true,
+                mac_cmd: true,
+                ..Default::default()
+            },
+            egui::Modifiers {
+                command: true,
+                ctrl: true,
+                ..Default::default()
+            },
+        ] {
+            let ctx = egui::Context::default();
+            let mut state = members(5);
+            let mut text = "Search text".to_owned();
+            let (field, list) = frame(&ctx, &mut state, &mut text, vec![]);
+            ctx.memory_mut(|m| m.request_focus(list));
+            frame(&ctx, &mut state, &mut text, vec![]);
+            frame(&ctx, &mut state, &mut text, vec![select_all_key(modifiers)]);
+            assert_eq!(state.contacts.len(), 5, "Command/Ctrl+A selects all list rows");
+            state.contacts.clear();
+            ctx.memory_mut(|m| m.request_focus(field));
+            frame(&ctx, &mut state, &mut text, vec![]);
+            frame(&ctx, &mut state, &mut text, vec![select_all_key(modifiers)]);
+            frame(&ctx, &mut state, &mut text, vec![egui::Event::Text("Replacement".into())]);
+            assert!(state.contacts.is_empty(), "typing in search never selects members");
+            assert_eq!(text, "Replacement", "Command/Ctrl+A still selects the search text");
+        }
+    }
 }

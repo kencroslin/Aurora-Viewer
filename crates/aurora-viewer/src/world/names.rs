@@ -7,7 +7,7 @@
 use aurora_llsd::Llsd;
 use aurora_net::AvatarNameData;
 use parking_lot::Mutex;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -20,6 +20,48 @@ const MAX_UNREFRESHED_TIME: f64 = 20.0 * 60.0;
 const DEFAULT_EXPIRES: f64 = 60.0 * 60.0;
 /// A request still unanswered after this is sent again.
 const PENDING_TIMEOUT: f64 = 5.0 * 60.0;
+/// Bound both the launch rate and unresolved work when opening large lists.
+const NAME_BATCH: usize = 64;
+const NAME_IN_FLIGHT: usize = 128;
+const NAME_BATCH_INTERVAL: f64 = 0.5;
+
+#[derive(Default)]
+struct NameQueue {
+    ids: HashSet<Uuid>,
+    order: VecDeque<Uuid>,
+    urgent: VecDeque<Uuid>,
+    priority: HashSet<Uuid>,
+}
+
+impl NameQueue {
+    fn insert(&mut self, id: Uuid) {
+        if self.ids.insert(id) {
+            self.order.push_back(id);
+        }
+    }
+
+    fn prioritize(&mut self, id: Uuid) {
+        if self.ids.contains(&id) && self.priority.insert(id) {
+            self.urgent.push_back(id);
+        }
+    }
+
+    fn pop(&mut self, urgent: bool) -> Option<Uuid> {
+        while urgent && !self.urgent.is_empty() {
+            let id = self.urgent.pop_front()?;
+            self.priority.remove(&id);
+            if self.ids.remove(&id) {
+                return Some(id);
+            }
+        }
+        while let Some(id) = self.order.pop_front() {
+            if self.ids.remove(&id) {
+                return Some(id);
+            }
+        }
+        None
+    }
+}
 
 fn now() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
@@ -285,7 +327,8 @@ pub struct AvatarNames {
     rlva_allowed: HashSet<Uuid>,
     cache: HashMap<Uuid, AvatarName>,
     /// Names looked up while missing or expired: requested at the next poll.
-    ask: Mutex<HashSet<Uuid>>,
+    ask: Mutex<NameQueue>,
+    last_request: Option<f64>,
     /// Requests in flight (sent at, unix time).
     pending: HashMap<Uuid, f64>,
     last_expire_check: f64,
@@ -388,6 +431,13 @@ impl AvatarNames {
         let _ = self.get(id);
     }
 
+    /// A name needed on screen goes ahead of background contact loading.
+    /// Half each dispatch remains available to the ordinary FIFO queue.
+    pub fn want_visible(&self, id: &Uuid) {
+        self.want(id);
+        self.ask.lock().prioritize(*id);
+    }
+
     /// The avatar whose user name is `name`, among the cached ones
     /// (LLAvatarNameCache::findIdByName; a "Resident" last name written out
     /// matches too, and the case does not count: buildLegacyName capitalises
@@ -414,15 +464,34 @@ impl AvatarNames {
         self.pending.get(id).is_some_and(|t| *t > now() - PENDING_TIMEOUT)
     }
 
-    /// Ids to request now (marked in flight).
+    /// A paced FIFO batch, marked in flight. Repeated paints neither
+    /// duplicate nor reorder queued names. A stalled service cannot launch
+    /// thousands of concurrent requests; pending entries still time out.
     pub fn take_asks(&mut self) -> Vec<Uuid> {
-        let t = now();
-        let asks: Vec<Uuid> = self.ask.lock().drain().collect();
-        let v: Vec<Uuid> = asks.into_iter().filter(|id| !self.is_pending(id)).collect();
-        for id in &v {
-            self.pending.insert(*id, t);
+        self.take_asks_at(now())
+    }
+
+    fn take_asks_at(&mut self, t: f64) -> Vec<Uuid> {
+        if self.last_request.is_some_and(|last| t >= last && t - last < NAME_BATCH_INTERVAL) {
+            return Vec::new();
         }
-        v
+        self.pending.retain(|_, sent| *sent > t - PENDING_TIMEOUT);
+        let room = NAME_BATCH.min(NAME_IN_FLIGHT.saturating_sub(self.pending.len()));
+        let mut ids = Vec::with_capacity(room);
+        let mut queue = self.ask.lock();
+        while ids.len() < room {
+            let Some(id) = queue.pop(ids.len() < NAME_BATCH / 2).or_else(|| queue.pop(true)) else {
+                break;
+            };
+            if !self.pending.contains_key(&id) {
+                self.pending.insert(id, t);
+                ids.push(id);
+            }
+        }
+        if !ids.is_empty() {
+            self.last_request = Some(t);
+        }
+        ids
     }
 
     /// LLAvatarNameCache::processName. Returns the previous entry.
@@ -704,5 +773,69 @@ mod tests {
         // the alias gone, the real names come back
         names.set_aliases(HashMap::new());
         assert_eq!(names.get(&jane).map(|n| n.display(&o)).as_deref(), Some("Jane Doe"));
+    }
+    #[test]
+    fn contact_name_loading_is_fifo_paced_and_bounded_with_5000_requests() {
+        let mut names = AvatarNames::default();
+        let ids: Vec<_> = (1..=5000).map(Uuid::from_u128).collect();
+        for id in &ids {
+            names.want(id);
+        }
+        for id in &ids {
+            names.want(id);
+        }
+        assert_eq!(names.ask.lock().ids.len(), 5000);
+        let t = now();
+        let first = names.take_asks_at(t);
+        assert_eq!(first, ids[..NAME_BATCH]);
+        assert!(names.take_asks_at(t + 0.1).is_empty());
+        let second = names.take_asks_at(t + NAME_BATCH_INTERVAL);
+        assert_eq!(second, ids[NAME_BATCH..NAME_IN_FLIGHT]);
+        assert!(names.take_asks_at(t + 1.0).is_empty(), "unresolved requests apply backpressure");
+        let mut received = first.clone();
+        received.extend(second.iter().copied());
+        for id in received.clone() {
+            names.on_legacy(id, "Member", "Resident");
+        }
+        let mut tick = t + 1.0;
+        while received.len() < ids.len() {
+            let batch = names.take_asks_at(tick);
+            assert!(!batch.is_empty());
+            assert!(batch.len() <= NAME_BATCH);
+            for id in &batch {
+                names.on_legacy(*id, "Member", "Resident");
+            }
+            received.extend(batch);
+            tick += NAME_BATCH_INTERVAL;
+        }
+        assert_eq!(received, ids, "every queued member completes without duplicates or starvation");
+        assert!(names.ask.lock().ids.is_empty());
+    }
+
+    #[test]
+    fn contact_name_loading_recovers_capacity_after_timeout() {
+        let mut names = AvatarNames::default();
+        for id in (1..=200).map(Uuid::from_u128) {
+            names.want(&id);
+        }
+        let t = now();
+        assert_eq!(names.take_asks_at(t).len(), NAME_BATCH);
+        assert_eq!(names.take_asks_at(t + 0.5).len(), NAME_BATCH);
+        assert!(names.take_asks_at(t + 1.0).is_empty());
+        assert_eq!(names.take_asks_at(t + PENDING_TIMEOUT + 1.0).len(), NAME_BATCH);
+    }
+    #[test]
+    fn contact_name_loading_prioritizes_visible_rows_without_starving_background() {
+        let mut names = AvatarNames::default();
+        for id in (1..=5000).map(Uuid::from_u128) {
+            names.want(&id);
+        }
+        for id in (4901..=5000).map(Uuid::from_u128) {
+            names.want_visible(&id);
+            names.want_visible(&id);
+        }
+        let batch = names.take_asks_at(now());
+        assert_eq!(&batch[..32], &(4901..=4932).map(Uuid::from_u128).collect::<Vec<_>>());
+        assert_eq!(&batch[32..], &(1..=32).map(Uuid::from_u128).collect::<Vec<_>>());
     }
 }

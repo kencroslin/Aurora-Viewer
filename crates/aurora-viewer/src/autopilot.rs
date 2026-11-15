@@ -164,6 +164,79 @@ pub const AU_FLAGS_HIDETITLE: u8 = 0x01;
 /// walkToClickedLocation lasts 3 s).
 pub const MARK_DURATION: Duration = Duration::from_secs(3);
 
+/// Ground movement policy while following. The simulator supplies actual
+/// walking/running speeds; these modes never alter physics or flight speed.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum FollowMovement {
+    WalkOnly,
+    #[default]
+    Auto,
+    RunAllowed,
+}
+
+impl FollowMovement {
+    pub const ALL: [Self; 3] = [Self::WalkOnly, Self::Auto, Self::RunAllowed];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::WalkOnly => aurora_i18n::tr!("follow-mode-walk"),
+            Self::Auto => aurora_i18n::tr!("follow-mode-auto"),
+            Self::RunAllowed => aurora_i18n::tr!("follow-mode-run"),
+        }
+    }
+
+    fn running(self, gap: f32, distance: f32, was_running: bool, target_running: bool) -> bool {
+        let margin = match self {
+            Self::WalkOnly => return false,
+            Self::Auto if !target_running => return false,
+            Self::Auto => {
+                if was_running {
+                    0.5
+                } else {
+                    1.0
+                }
+            }
+            Self::RunAllowed => {
+                if was_running {
+                    2.0
+                } else {
+                    3.0
+                }
+            }
+        };
+        gap > distance + margin
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FollowStatus {
+    Following,
+    Nearby,
+    Paused,
+    TargetUnavailable,
+    Blocked,
+    FlightBlocked,
+    Recovering,
+}
+
+impl FollowStatus {
+    pub fn held(self) -> bool {
+        matches!(self, Self::Paused | Self::TargetUnavailable | Self::Blocked | Self::FlightBlocked)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Following => aurora_i18n::tr!("follow-status-active"),
+            Self::Nearby => aurora_i18n::tr!("follow-status-nearby"),
+            Self::Paused => aurora_i18n::tr!("follow-status-paused"),
+            Self::TargetUnavailable => aurora_i18n::tr!("follow-status-missing"),
+            Self::Blocked => aurora_i18n::tr!("follow-status-blocked"),
+            Self::FlightBlocked => aurora_i18n::tr!("follow-status-flight"),
+            Self::Recovering => aurora_i18n::tr!("follow-recovering"),
+        }
+    }
+}
+
 /// Aurora's follow controls. The Legacy Viewer's startFollowPilot accepts
 /// a stop distance but has no live controls or teleport recovery.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -171,6 +244,7 @@ pub const MARK_DURATION: Duration = Duration::from_secs(3);
 pub struct FollowSettings {
     pub distance: f32,
     pub teleport_if_stuck: bool,
+    pub movement: FollowMovement,
 }
 
 impl Default for FollowSettings {
@@ -178,6 +252,7 @@ impl Default for FollowSettings {
         Self {
             distance: 2.0,
             teleport_if_stuck: false,
+            movement: FollowMovement::Auto,
         }
     }
 }
@@ -227,6 +302,8 @@ pub struct AutoPilot {
     /// A second blocked arrival must stop, rather than teleport in a loop.
     /// Genuine travel of at least a metre permits a later recovery.
     recovery_origin: Option<Vec3>,
+    follow_movement: FollowMovement,
+    follow_hold: Option<FollowStatus>,
 }
 
 /// The finish callback of a walk: run when it ends within its stop
@@ -338,12 +415,63 @@ impl AutoPilot {
         }
     }
 
+    pub fn set_follow_settings(&mut self, settings: FollowSettings, position: Vec3) {
+        self.set_follow_distance(settings.bounded_distance(), position);
+        self.follow_movement = settings.movement;
+        if settings.movement == FollowMovement::WalkOnly {
+            self.run = false;
+        }
+    }
+
+    pub fn constrain_follow_run(&mut self, allowed: bool) {
+        if self.leader.is_some() && !allowed {
+            self.run = false;
+        }
+    }
+
+    pub fn follow_status(&self) -> FollowStatus {
+        self.follow_hold.unwrap_or(if self.waiting {
+            FollowStatus::Nearby
+        } else {
+            FollowStatus::Following
+        })
+    }
+
+    pub fn hold_follow(&mut self, status: FollowStatus, position: Vec3) {
+        if self.leader.is_some() && status.held() {
+            self.follow_hold = Some(status);
+            self.run = false;
+            self.reset_progress(position);
+        }
+    }
+
+    pub fn resume_follow(&mut self, position: Vec3) {
+        self.follow_hold = None;
+        self.run = false;
+        self.reset_progress(position);
+    }
+
+    /// A held follow retains its target while releasing manual controls.
+    pub fn controls_active(&self) -> bool {
+        self.leader.is_none() || self.follow_hold.is_none()
+    }
+
+    /// Active follow owns its run state. Pausing or stopping returns the
+    /// user's ordinary run preference without changing that preference.
+    pub fn running(&self, manual_run: bool) -> bool {
+        if self.leader.is_some() && self.controls_active() {
+            self.run
+        } else {
+            manual_run || self.run
+        }
+    }
+
     pub fn recovered(&mut self, position: Vec3) {
         self.recovery_origin = Some(position);
     }
 
     pub fn can_recover(&self) -> bool {
-        self.leader.is_some() && self.recovery_origin.is_none()
+        self.leader.is_some() && self.follow_hold.is_none() && self.recovery_origin.is_none()
     }
 
     /// startAutoPilotGlobal without a stop distance: the square root of the
@@ -370,6 +498,8 @@ impl AutoPilot {
             horizontal_thrust: FlightAxis::default(),
             vertical_thrust: FlightAxis::default(),
             recovery_origin: None,
+            follow_movement: FollowMovement::Auto,
+            follow_hold: None,
         }
     }
 
@@ -439,11 +569,15 @@ impl AutoPilot {
         if self.leader.is_some() {
             self.target = observed.position;
             self.target_velocity = observed.velocity;
-            let run_distance = self.stop_distance + if self.run { 0.5 } else { 1.0 };
-            self.run = observed.running
+            self.run = self.follow_hold.is_none()
                 && !self.flying
                 && observed.flight.flying != Some(true)
-                && (self.target - position).truncate().length() > run_distance;
+                && self.follow_movement.running(
+                    (self.target - position).truncate().length(),
+                    self.stop_distance,
+                    self.run,
+                    observed.running,
+                );
         }
         self.observe_flight(observed.flight, position);
     }
@@ -521,6 +655,9 @@ impl AutoPilot {
             flags: control::STOP,
             finish,
         };
+        if self.leader.is_some() && self.follow_hold.is_some() {
+            return stop(None);
+        }
         if !position.is_finite() || !self.target.is_finite() || !self.goal().is_finite() || !yaw.is_finite() || !dt.is_finite() {
             return stop(Some(Finish::NoProgress));
         }
@@ -1127,6 +1264,7 @@ mod tests {
         let chosen = FollowSettings {
             distance: 6.4,
             teleport_if_stuck: true,
+            ..Default::default()
         };
         let json = serde_json::to_string(&chosen).expect("follow settings");
         assert_eq!(serde_json::from_str::<FollowSettings>(&json).expect("saved settings"), chosen);
@@ -1170,6 +1308,7 @@ mod tests {
         let settings = FollowSettings {
             distance: 6.0,
             teleport_if_stuck: true,
+            ..Default::default()
         };
         let p = follow_recovery_position(Vec3::new(240.0, 20.0, 1.0), &target, settings).expect("precise target");
         assert!(p.abs_diff_eq(Vec3::new(254.1, 20.0, 49.5), 0.001));
@@ -1890,5 +2029,136 @@ mod tests {
         // a variable region keeps a point of its own
         let (slot, _) = teleport_destination((256_000, 256_512), (512.0, 512.0), Vec3::new(300.0, 20.0, 30.0), 1.0);
         assert_eq!(slot, (256_000, 256_512));
+    }
+    #[test]
+    fn follow_modes_match_running_catch_up_and_walk_near_the_target() {
+        let target = |gap, running, flying| AvatarTarget {
+            position: Vec3::X * gap,
+            velocity: Vec3::ZERO,
+            running,
+            flight: FlightTarget {
+                flying: Some(flying),
+                landing_height: 0.0,
+            },
+        };
+        let mut pilot = AutoPilot::avatar(Vec3::ZERO, Vec3::X * 20.0, Some(uuid::Uuid::from_u128(7)), false, Instant::now());
+        for mode in FollowMovement::ALL {
+            pilot.set_follow_settings(
+                FollowSettings {
+                    movement: mode,
+                    ..Default::default()
+                },
+                Vec3::ZERO,
+            );
+            pilot.observe_avatar(target(20.0, true, false), Vec3::ZERO);
+            assert_eq!(
+                pilot.running(true),
+                mode != FollowMovement::WalkOnly,
+                "active follow owns the run state even with Always Run enabled"
+            );
+            pilot.observe_avatar(target(20.0, false, false), Vec3::ZERO);
+            assert_eq!(pilot.running(false), mode == FollowMovement::RunAllowed);
+            pilot.observe_avatar(target(2.4, true, false), Vec3::ZERO);
+            assert!(!pilot.running(true), "walk the final approach in every mode");
+            pilot.observe_avatar(target(20.0, true, true), Vec3::ZERO);
+            assert!(!pilot.run, "ground modes do not force running in flight");
+        }
+        pilot.set_follow_settings(
+            FollowSettings {
+                movement: FollowMovement::RunAllowed,
+                ..Default::default()
+            },
+            Vec3::ZERO,
+        );
+        pilot.observe_avatar(target(5.1, false, false), Vec3::ZERO);
+        assert!(pilot.run);
+        pilot.observe_avatar(target(4.5, false, false), Vec3::ZERO);
+        assert!(pilot.run, "hysteresis prevents run/walk flicker");
+        pilot.observe_avatar(target(3.9, false, false), Vec3::ZERO);
+        assert!(!pilot.run);
+    }
+
+    #[test]
+    fn follow_pause_missing_and_blocked_hold_identity_without_motion_or_recovery() {
+        let id = uuid::Uuid::from_u128(7);
+        for status in [
+            FollowStatus::Paused,
+            FollowStatus::TargetUnavailable,
+            FollowStatus::Blocked,
+            FollowStatus::FlightBlocked,
+        ] {
+            let mut pilot = AutoPilot::avatar(Vec3::ZERO, Vec3::X * 20.0, Some(id), false, Instant::now());
+            pilot.run = true;
+            pilot.hold_follow(status, Vec3::ZERO);
+            assert_eq!(pilot.follow_status(), status);
+            assert!(!pilot.controls_active(), "manual controls must be released while held");
+            assert!(!pilot.can_recover(), "a held follow must not initiate a teleport");
+            assert!(!pilot.running(false));
+            assert!(pilot.running(true), "normal manual run preference returns while paused");
+            for _ in 0..1000 {
+                assert_eq!(
+                    pilot.step(Vec3::X * 100.0, 0.0, FRAME),
+                    Step {
+                        yaw: 0.0,
+                        flags: control::STOP,
+                        finish: None
+                    }
+                );
+            }
+            pilot.set_follow_settings(
+                FollowSettings {
+                    distance: 6.0,
+                    movement: FollowMovement::WalkOnly,
+                    ..Default::default()
+                },
+                Vec3::X * 100.0,
+            );
+            assert_eq!(pilot.follow_status(), status, "editing settings must not resume");
+            assert_eq!(pilot.leader, Some(id));
+            pilot.target = Vec3::X * 120.0;
+            pilot.resume_follow(Vec3::X * 100.0);
+            assert!(pilot.controls_active());
+            assert!(pilot.can_recover());
+            let step = pilot.step(Vec3::X * 100.0, 0.0, FRAME);
+            assert_eq!(step.finish, None, "resume resets the old stall timer");
+            assert_ne!(step.flags & control::AT_POS, 0);
+        }
+    }
+
+    #[test]
+    fn follow_mode_settings_load_legacy_json_and_round_trip_every_mode() {
+        let old: FollowSettings = serde_json::from_str(r#"{"distance":4.0,"teleport_if_stuck":true}"#).unwrap();
+        assert_eq!(old.movement, FollowMovement::Auto);
+        assert_eq!(old.distance, 4.0);
+        assert!(old.teleport_if_stuck);
+        for mode in FollowMovement::ALL {
+            let settings = FollowSettings { movement: mode, ..old };
+            let json = serde_json::to_string(&settings).unwrap();
+            assert_eq!(serde_json::from_str::<FollowSettings>(&json).unwrap(), settings);
+        }
+        let mut ordinary = AutoPilot::avatar(Vec3::ZERO, Vec3::X * 10.0, None, false, Instant::now());
+        ordinary.hold_follow(FollowStatus::Paused, Vec3::ZERO);
+        assert!(ordinary.controls_active(), "Go to keeps its existing behavior");
+        assert!(ordinary.running(true));
+    }
+    #[test]
+    fn follow_running_constraint_can_be_applied_and_released_without_changing_manual_preferences() {
+        let target = || AvatarTarget {
+            position: Vec3::X * 20.0,
+            velocity: Vec3::ZERO,
+            running: true,
+            flight: FlightTarget {
+                flying: Some(false),
+                landing_height: 0.0,
+            },
+        };
+        let mut pilot = AutoPilot::avatar(Vec3::ZERO, Vec3::X * 20.0, Some(uuid::Uuid::from_u128(7)), false, Instant::now());
+        pilot.observe_avatar(target(), Vec3::ZERO);
+        assert!(pilot.running(false));
+        pilot.constrain_follow_run(false);
+        assert!(!pilot.running(true));
+        pilot.observe_avatar(target(), Vec3::ZERO);
+        pilot.constrain_follow_run(true);
+        assert!(pilot.running(false));
     }
 }

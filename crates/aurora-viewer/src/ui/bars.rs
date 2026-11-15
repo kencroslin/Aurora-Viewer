@@ -113,6 +113,8 @@ pub enum BarAction {
     SitGround,
     StandUp,
     ResetCamera,
+    FaceNearest,
+    ToggleKeepFacing,
     /// Teleport history (navigation bar arrows).
     TeleportBack,
     TeleportForward,
@@ -2422,6 +2424,8 @@ pub fn run_command(ctx: &egui::Context, cmd: &str, panels: &mut Panels) -> BarAc
         "marketplacelistings" => return BarAction::ToggleMarketplaceListings,
         "stop_animations" => return BarAction::StopAnimations,
         "resync_animations" => return BarAction::ResyncAnimations,
+        "face_nearest_avatar" => return BarAction::FaceNearest,
+        "keep_facing_avatar" => return BarAction::ToggleKeepFacing,
         "vr_view" => return BarAction::ToggleVr,
         "immersive" => return BarAction::ToggleImmersive,
         _ => {}
@@ -3243,6 +3247,8 @@ pub(crate) fn toolbar_row(
         };
         let tip = if matches!(b.command.as_str(), "movelock" | "move_lock") {
             toolbar.movelock_status.clone()
+        } else if b.command == "keep_facing_avatar" {
+            aurora_i18n::tr!("facing-keep-tip").to_owned()
         } else {
             tip
         };
@@ -4134,6 +4140,7 @@ mod tests {
             assert_eq!(none.lit(cmd), Some(false), "{cmd}");
         }
         let all = super::super::toolbar::Shown {
+            keep_facing: true,
             profile: true,
             build: true,
             poser: true,
@@ -4203,6 +4210,25 @@ mod tests {
         assert_eq!(painted_count(60.0, 250), (vec!["99+".to_owned()], 0));
         assert_eq!(painted_count(30.0, 250), (vec!["99+".to_owned()], 0));
         assert_eq!(painted_count(14.0, 3), (Vec::new(), 1));
+    }
+    #[test]
+    fn facing_toolbar_actions_are_ready_dispatch_and_light_continuous_mode() {
+        let ctx = egui::Context::default();
+        let mut panels = Panels::from_settings(&crate::settings::Settings::default());
+        assert!(super::super::toolbar::ready("face_nearest_avatar"));
+        assert!(super::super::toolbar::ready("keep_facing_avatar"));
+        assert!(matches!(
+            run_command(&ctx, "face_nearest_avatar", &mut panels),
+            BarAction::FaceNearest
+        ));
+        assert!(matches!(
+            run_command(&ctx, "keep_facing_avatar", &mut panels),
+            BarAction::ToggleKeepFacing
+        ));
+        let mut shown = super::super::toolbar::Shown::default();
+        assert_eq!(shown.lit("keep_facing_avatar"), Some(false));
+        shown.keep_facing = true;
+        assert_eq!(shown.lit("keep_facing_avatar"), Some(true));
     }
 }
 
