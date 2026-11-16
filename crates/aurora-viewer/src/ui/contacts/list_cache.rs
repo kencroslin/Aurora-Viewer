@@ -19,6 +19,7 @@ struct Revision {
 struct Entry {
     id: Uuid,
     search: String,
+    online: bool,
 }
 
 #[derive(Default)]
@@ -26,7 +27,7 @@ pub(crate) struct SetListCache {
     revision: Option<Revision>,
     refreshed: Option<Instant>,
     entries: Vec<Entry>,
-    filter: Option<String>,
+    filter: Option<(String, bool)>,
     pub members: Vec<Uuid>,
     pub visible: HashSet<Uuid>,
     pub total: usize,
@@ -40,7 +41,15 @@ impl SetListCache {
         self.update_at(world, set, filter, Instant::now());
     }
 
+    pub fn update_online(&mut self, world: &World, set: &str, filter: &str, online_only: bool) {
+        self.update_at_with_online(world, set, filter, Instant::now(), online_only);
+    }
+
     fn update_at(&mut self, world: &World, set: &str, filter: &str, now: Instant) {
+        self.update_at_with_online(world, set, filter, now, false);
+    }
+
+    fn update_at_with_online(&mut self, world: &World, set: &str, filter: &str, now: Instant, online_only: bool) {
         let social = &world.social;
         let names = &social.avatar_names;
         let revision = Revision {
@@ -88,7 +97,11 @@ impl SetListCache {
                     }
                     (
                         (!online_first || !online.contains(&id), crate::natural_order::key(&shown)),
-                        Entry { id, search },
+                        Entry {
+                            id,
+                            search,
+                            online: online.contains(&id),
+                        },
                     )
                 })
                 .collect();
@@ -104,15 +117,16 @@ impl SetListCache {
             }
         }
         let filter = filter.trim().to_lowercase();
-        if self.filter.as_ref() != Some(&filter) {
+        let filter_key = (filter.clone(), online_only);
+        if self.filter.as_ref() != Some(&filter_key) {
             self.members = self
                 .entries
                 .iter()
-                .filter(|e| filter.is_empty() || e.search.contains(&filter))
+                .filter(|e| (!online_only || e.online) && (filter.is_empty() || e.search.contains(&filter)))
                 .map(|e| e.id)
                 .collect();
             self.visible = self.members.iter().copied().collect();
-            self.filter = Some(filter);
+            self.filter = Some(filter_key);
         }
     }
 }
@@ -162,6 +176,13 @@ mod tests {
         assert_eq!(selected, cache.members);
         cache.update_at(&world, "Large", "", t + Duration::from_millis(800));
         assert_eq!(cache.members.len(), 5000);
+        cache.update_at_with_online(&world, "Large", "", t + Duration::from_millis(850), true);
+        assert_eq!(cache.members.len(), 200);
+        assert_eq!(cache.rebuilds, 1, "online filtering reuses the sorted projection");
+        cache.update_at_with_online(&world, "Large", "Member 5000", t + Duration::from_millis(900), true);
+        assert!(cache.members.is_empty(), "offline members stay hidden during search");
+        cache.update_at(&world, "Large", "Member 5000", t + Duration::from_millis(950));
+        assert_eq!(cache.members, vec![ids[4999]]);
         // Fallback legacy names do not publish a generation.
         world.social.names.insert(ids[4998], "Renamed Member".into());
         cache.update_at(&world, "Large", "renamed", t + Duration::from_secs(1));
