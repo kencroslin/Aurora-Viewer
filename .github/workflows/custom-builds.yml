@@ -1,0 +1,203 @@
+name: Custom Mac and Windows builds
+
+on:
+  push:
+    branches: [automation]
+    paths:
+      - .github/workflows/custom-builds.yml
+      - scripts/package.py
+  schedule:
+    - cron: '27 10 * * *'
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Build even when the official source has not changed
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: custom-upstream-builds
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    if: github.repository == 'kencroslin/Aurora-Viewer' && github.ref == 'refs/heads/automation'
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.merge.outputs.commit }}
+      base: ${{ steps.merge.outputs.base }}
+      upstream: ${{ steps.merge.outputs.upstream }}
+      version: ${{ steps.merge.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/heads/custom-builds
+          fetch-depth: 0
+          persist-credentials: false
+      - id: merge
+        name: Merge official Aurora main
+        env:
+          REBUILD: ${{ github.event_name == 'push' || inputs.rebuild || false }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream https://github.com/Aurora-Viewer/Aurora-Viewer.git
+          git fetch --tags upstream main
+          base=$(git rev-parse HEAD)
+          upstream=$(git rev-parse refs/remotes/upstream/main)
+          if git merge-base --is-ancestor "$upstream" "$base" && [[ "$REBUILD" != true ]]; then
+            echo 'Already up to date.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git switch -c candidate
+          if ! git merge --no-ff --no-edit "$upstream"; then
+            {
+              printf '### Upstream merge stopped\n\nCustom base `%s`, upstream `%s`. Resolve on a branch and update `custom-builds` with the reviewed merge.\n\n' "$base" "$upstream"
+              git diff --name-only --diff-filter=U | sed 's/^/- /'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          commit=$(git rev-parse HEAD)
+          stable=$(git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' --abbrev=0 "$upstream")
+          [[ "$stable" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          version="${stable#v}-custom.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
+          mkdir candidate-files
+          git archive --format=tar.gz --prefix=viewer/ -o candidate-files/source.tar.gz "$commit"
+          if [[ "$base" != "$commit" ]]; then
+            git bundle create candidate-files/merge.bundle refs/heads/candidate "^$base"
+          fi
+          printf 'commit=%s\nbase=%s\nupstream=%s\nversion=%s\n' "$commit" "$base" "$upstream" "$version" >> "$GITHUB_OUTPUT"
+      - if: steps.merge.outputs.commit != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-source
+          path: candidate-files/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  build:
+    needs: merge
+    if: needs.merge.outputs.commit != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: macos-arm64
+          - runner: windows-2025
+            platform: windows-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      VERSION: ${{ needs.merge.outputs.version }}
+      SOURCE_COMMIT: ${{ needs.merge.outputs.commit }}
+      UPSTREAM_COMMIT: ${{ needs.merge.outputs.upstream }}
+      PACKAGE_PLATFORM: ${{ matrix.platform }}
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: automation
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: candidate-source
+          path: candidate
+      - name: Extract exact merged source
+        shell: bash
+        run: tar -xzf candidate/source.tar.gz
+      - name: Build
+        shell: bash
+        working-directory: viewer
+        run: |
+          set -euo pipefail
+          export AURORA_VERSION_TAG="v$VERSION"
+          rustup toolchain install --profile minimal --no-self-update
+          if [[ "$PACKAGE_PLATFORM" == windows-x64 ]]; then
+            [[ "${RUNNER_ARCH}" == X64 ]]
+            cargo build --locked -p aurora-viewer --features xr-static-loader
+          else
+            [[ "$(uname -m)" == arm64 ]]
+            cargo build --locked -p aurora-viewer
+          fi
+      - name: Package and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$PACKAGE_PLATFORM" == windows-x64 ]]; then
+            python automation/scripts/package.py viewer dist
+          else
+            python3 automation/scripts/package.py viewer dist
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  prepare-release:
+    needs: [merge, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.merge.outputs.version }}
+      SOURCE_COMMIT: ${{ needs.merge.outputs.commit }}
+      SOURCE_BASE: ${{ needs.merge.outputs.base }}
+      UPSTREAM_COMMIT: ${{ needs.merge.outputs.upstream }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/heads/custom-builds
+          fetch-depth: 0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: candidate-source
+          path: candidate
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: '*-*64'
+          path: release-files
+          merge-multiple: true
+      - name: Verify both downloads and save the successful merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "release-files/Aurora-Custom-$VERSION-macos-arm64.zip"
+          test -f "release-files/Aurora-Custom-$VERSION-windows-x64.zip"
+          (cd release-files && sha256sum -c -- *.sha256)
+          [[ "$(git rev-parse HEAD)" == "$SOURCE_BASE" ]]
+          if [[ "$SOURCE_BASE" != "$SOURCE_COMMIT" ]]; then
+            git bundle verify candidate/merge.bundle
+            git fetch candidate/merge.bundle refs/heads/candidate
+            [[ "$(git rev-parse FETCH_HEAD)" == "$SOURCE_COMMIT" ]]
+            git merge-base --is-ancestor "$SOURCE_BASE" "$SOURCE_COMMIT"
+            git push origin "$SOURCE_COMMIT:refs/heads/custom-builds"
+          fi
+      - name: Create release draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          Personal build derived from Aurora Viewer. Review branding, privacy, and live testing before publishing this draft.
+
+          - macOS Apple Silicon: extract the ZIP and move the app to Applications if desired. This build is signed ad hoc.
+          - Windows x64: extract the whole ZIP and open aurora-viewer.exe. This build is unsigned.
+          - Version: $VERSION
+          - Source: https://github.com/$GH_REPO/tree/$SOURCE_COMMIT
+          - Official upstream: https://github.com/Aurora-Viewer/Aurora-Viewer/commit/$UPSTREAM_COMMIT
+          - Checksums: SHA-256 files accompany each download.
+          EOF
+          gh release create "custom-build-$VERSION" release-files/* candidate/source.tar.gz \
+            --draft --prerelease --target "$SOURCE_COMMIT" \
+            --title "Aurora Custom $VERSION" --notes-file release-notes.md
