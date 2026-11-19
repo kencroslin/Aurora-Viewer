@@ -167,7 +167,7 @@ impl App {
             return;
         }
         let world = &self.world;
-        let name = |id: &uuid::Uuid| world.social.avatar_names.complete(id);
+        let name = |id: &uuid::Uuid, _mention: bool| world.social.avatar_names.complete(id);
         // a label still waiting for its name keeps the address: the
         // notification is not drawn again once it comes (#947)
         let app = |url: &str, link: &crate::slapp::AppLink| match crate::ui::chat::app_label(world, url, link) {
@@ -239,7 +239,9 @@ impl App {
             .get_or_insert_with(|| (crate::cli::window_title(), crate::cli::window_title()));
         let mut want = titled(base, unread, on);
         // (the 3D paused behind on a busy card, busy_pause.rs)
-        if self.busy_pause.paused() {
+        if self.gaming_mode.on {
+            want = aurora_i18n::tr!("gaming-mode-window-title", title = want.as_str());
+        } else if self.busy_pause.paused() {
             want = aurora_i18n::tr!("busy-pause-window-title", title = want.as_str());
         }
         // (the render targets waiting for video memory)
@@ -277,12 +279,12 @@ impl App {
                         continue;
                     }
                     self.world.social.session_mut(session);
-                    self.world.social.focus_im = Some(session);
-                    self.chat_ui.conv_focus_request = true;
+                    self.world.focus_conversation(session, true);
                     crate::ui::notifications::open_conversations(&self.egui_ctx, &mut self.panels.chat);
                 }
                 Some(Open::NearbyChat) => {
                     self.world.social.focus_im = Some(uuid::Uuid::nil());
+                    self.world.social.focus_im_to_type = false;
                     crate::ui::notifications::open_conversations(&self.egui_ctx, &mut self.panels.chat);
                 }
                 Some(Open::Notifications) => self.notif_ui.open = true,

@@ -14,6 +14,7 @@ use crate::theme::Palette;
 use crate::ui::context::{self, CtxAction};
 use crate::ui::place_details::Ctx;
 use crate::ui::widgets::{self, ActionKind};
+use crate::world::names::NameScope;
 use aurora_net::groups::{BuiltinRole, GroupMember, LastSeen, RoleChange, powers};
 use egui::{FontId, Pos2, Rect, Sense, Vec2};
 use std::collections::BTreeSet;
@@ -264,7 +265,7 @@ fn avatar(owner: &mut GroupProfileUi, ui: &egui::Ui, c: &Ctx, env: &Env, rect: R
     }
     widgets::avatar_disc(ui, c.p, rect, pic, name, false);
     // what the scene or the friend list says, else what the group says
-    let status = match crate::ui::presence::of(c.world, &id) {
+    let status = match crate::ui::presence::of_in(c.world, NameScope::Roster, &id) {
         crate::ui::presence::Status::Unknown | crate::ui::presence::Status::Offline if online => crate::ui::presence::Status::Online,
         crate::ui::presence::Status::Unknown => crate::ui::presence::Status::Offline,
         s => s,
@@ -334,7 +335,7 @@ fn confirm_dialog(st: &mut GroupProfileUi, ctx: &egui::Context, c: &Ctx, v: &Vie
         return;
     };
     let p = c.p;
-    let name = |ids: &[Uuid]| c.world.social.name_of(&ids[0]);
+    let name = |ids: &[Uuid]| c.world.social.name_in(NameScope::Roster, &ids[0]);
     let (text, ok, icon) = match &confirm {
         Confirm::Eject(ids) if ids.len() == 1 => (
             aurora_i18n::tr!("ui-group-admin-eject-one", name = name(ids)),
@@ -500,7 +501,7 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
     }
     if export && let Some(d) = v.data {
         let world = c.world;
-        let csv = admin_members::export_csv(&v.name, d, &|id| world.social.name_of(id));
+        let csv = admin_members::export_csv(&v.name, d, &|id| world.social.name_in(NameScope::Roster, id));
         let file = format!(
             "{}_members.csv",
             v.name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")
@@ -538,7 +539,7 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
         let world = c.world;
         st.members.rows = rows(
             v,
-            &|id| world.social.display_name_of(id),
+            &|id| world.social.display_name_in(NameScope::Roster, id),
             &st.members.filter,
             st.members.show,
             st.members.sort,
@@ -547,8 +548,11 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
         // the names still unknown are asked (all of them: the filter and
         // the order need them)
         if let Some(d) = d {
-            c.want_names
-                .extend(d.members.keys().filter(|id| world.social.display_name_of(id) == "…"));
+            c.want_names.extend(
+                d.members
+                    .keys()
+                    .filter(|id| world.social.display_name_in(NameScope::Roster, id) == "…"),
+            );
         }
         st.members.retain_contacts();
         st.members.made = Some(key);
@@ -718,7 +722,7 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
                     if ids.len() > 1 {
                         context::avatars_menu(ui, p, c.world, &ids);
                     } else {
-                        context::avatar_list_menu(ui, p, c.world, id, context::AvatarList::Name);
+                        context::avatar_roster_menu(ui, p, c.world, id, context::AvatarList::Name);
                     }
                 });
                 let mut x = row.left() + tick_w;
@@ -803,7 +807,7 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
         ui.label(egui::RichText::new(text).size(12.5).color(p.muted));
     }
     if let Some(id) = open_profile {
-        context::request(ui.ctx(), CtxAction::Profile(id));
+        context::request(ui.ctx(), CtxAction::RosterProfile(id));
     }
 
     // the selection's buttons
@@ -884,7 +888,7 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
             .clicked()
                 && let Some(id) = selected
             {
-                context::request(ui.ctx(), CtxAction::Profile(id));
+                context::request(ui.ctx(), CtxAction::RosterProfile(id));
             }
             if hint(
                 widgets::action_button_if(
@@ -1025,7 +1029,10 @@ fn roles_card(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, v: &View,
     }
     let selected = targets.first().copied();
     let title = match selected {
-        Some(id) => aurora_i18n::tr!("ui-group-profile-roles-of", name = c.world.social.display_name_of(&id)),
+        Some(id) => aurora_i18n::tr!(
+            "ui-group-profile-roles-of",
+            name = c.world.social.display_name_in(NameScope::Roster, &id)
+        ),
         None => aurora_i18n::tr!("ui-group-profile-roles").to_owned(),
     };
     if selected.is_some() {
@@ -1258,13 +1265,17 @@ pub fn classic_list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, v: 
     let world = c.world;
     let rows = rows(
         v,
-        &|id| world.social.display_name_of(id),
+        &|id| world.social.display_name_in(NameScope::Roster, id),
         &st.members.filter,
         Show::All,
         Sort::Status,
         false,
     );
-    for id in rows.iter().map(|(id, _)| id).filter(|id| world.social.display_name_of(id) == "…") {
+    for id in rows
+        .iter()
+        .map(|(id, _)| id)
+        .filter(|id| world.social.display_name_in(NameScope::Roster, id) == "…")
+    {
         c.want_names.insert(*id);
     }
     if st.members.rows != rows {
@@ -1303,14 +1314,14 @@ pub fn classic_list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, v: 
                     st.members.contact_menu_targets(id);
                 }
                 if resp.double_clicked() {
-                    context::request(ui.ctx(), CtxAction::Profile(id));
+                    context::request(ui.ctx(), CtxAction::RosterProfile(id));
                 }
                 crate::ui::menu::context_menu(&resp, p, |ui| {
                     let ids = st.members.contact_menu_targets(id);
                     if ids.len() > 1 {
                         context::avatars_menu(ui, p, world, &ids);
                     } else {
-                        context::avatar_list_menu(ui, p, world, id, context::AvatarList::Name);
+                        context::avatar_roster_menu(ui, p, world, id, context::AvatarList::Name);
                     }
                 });
                 let third = row.width() / 3.0;

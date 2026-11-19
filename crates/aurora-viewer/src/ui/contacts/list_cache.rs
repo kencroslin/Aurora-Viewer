@@ -1,7 +1,10 @@
 //! Shared projection for both contact-set layouts. Names and sorting are
 //! rebuilt on model changes, not every painted frame; typing only filters
 //! already folded text. Never search raw names behind privacy filtering.
-use crate::world::{World, names::NameOptions};
+use crate::world::{
+    World,
+    names::{NameOptions, NameScope},
+};
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -75,7 +78,7 @@ impl SetListCache {
             let mut entries: Vec<_> = members
                 .into_iter()
                 .map(|id| {
-                    let name = names.get(&id);
+                    let name = names.get_in(NameScope::Roster, &id);
                     self.known += usize::from(name.is_some() || social.names.contains_key(&id));
                     let shown = name
                         .map(|n| n.complete(&names.options))
@@ -202,7 +205,7 @@ mod tests {
         assert_eq!(cache.members, vec![id]);
         world.social.avatar_names.set_rlva_privacy(true, HashSet::new());
         cache.update_at(&world, "Set", "privatename", t);
-        assert!(cache.members.is_empty(), "a cached search cannot reveal a newly hidden name");
+        assert_eq!(cache.members, vec![id], "roster names remain visible under @shownames");
         world.social.avatar_names.set_rlva_privacy(false, HashSet::new());
         cache.update_at(&world, "Set", "privatename", t);
         assert_eq!(cache.members, vec![id]);

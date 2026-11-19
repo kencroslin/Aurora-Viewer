@@ -1154,9 +1154,9 @@ fn members(
     let names = &world.social.avatar_names;
     let name_of = |id: &Uuid| {
         names
-            .get(id)
+            .get_in(NameScope::Roster, id)
             .map(|n| n.display(&names.options))
-            .unwrap_or_else(|| world.social.name_of(id))
+            .unwrap_or_else(|| world.social.name_in(NameScope::Roster, id))
     };
     let mut cache = std::mem::take(&mut st.editor_member_cache);
     cache.update(world, set, &st.editor_member_filter);

@@ -209,7 +209,7 @@ impl World {
         }
         if self.groups.report_blocks {
             let shown_name = if kind == MuteType::Agent && !self.rlva_can_name(id) {
-                super::rlva::privacy::anonymous(id).display_name.clone()
+                self.rlva_anonymous(id).display_name.clone()
             } else {
                 name.clone()
             };
@@ -367,6 +367,17 @@ impl World {
     pub fn legacy_name(&self, id: &Uuid) -> Option<String> {
         self.social.names.get(id).cloned().or_else(|| self.avatar_name(id))
     }
+
+    /// `legacy_name` of a name shown in `scope`: a place that names its
+    /// resident (a profile opened from a conversation, `NameScope::Roster`)
+    /// gets the real name while `@shownames` hides it in the world, never
+    /// the stand-in.
+    pub fn legacy_name_in(&self, scope: super::names::NameScope, id: &Uuid) -> Option<String> {
+        if !id.is_nil() && !self.rlva_shows_name(scope, *id) {
+            return Some(self.rlva_anonymous(*id).display_name.clone());
+        }
+        self.social.names.get(id).cloned().or_else(|| self.scene_name(id))
+    }
 }
 
 #[cfg(test)]
@@ -479,7 +490,7 @@ mod tests {
         let notice = &w.chat.back().expect("block notice").text;
         assert!(!notice.contains("Demo Owner"));
         assert!(!notice.contains("A custom display name"));
-        assert!(notice.contains(&super::super::rlva::privacy::anonymous(owner).display_name));
+        assert!(notice.contains(&w.rlva_anonymous(owner).display_name));
     }
 
     #[test]

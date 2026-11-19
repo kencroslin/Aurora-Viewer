@@ -1,7 +1,7 @@
 //! Shared membership-only export and recipient-controlled import preview.
 //! File dialogs and XML parsing run off the interface thread.
 use super::*;
-use crate::world::contact_sets::importing::{ImportChoice, ImportData, shared_set_xml};
+use crate::world::contact_sets::importing::{Begun, ImportChoice, ImportData, Saving, shared_set_xml};
 mod comparison;
 
 use std::io::Read;
@@ -80,7 +80,7 @@ impl Preview {
 
 impl ContactsUi {
     pub(crate) fn can_import_contact_sets(&self) -> bool {
-        self.import_job.is_none() && self.import_preview.is_none()
+        self.import_job.is_none() && self.import_preview.is_none() && self.import_saving.is_none()
     }
 
     pub(crate) fn can_export_contact_set(&self, world: &World, set: &str) -> bool {
@@ -183,7 +183,52 @@ fn notify(world: &mut World, success: bool, text: String) {
     );
 }
 
+/// A confirmed preview waiting for the account's background save.
+pub(super) struct PendingSave {
+    preview: Preview,
+    target: Option<String>,
+    saving: Box<Saving>,
+}
+
+fn finish_shared_import(world: &mut World, st: &mut ContactsUi, result: Result<usize, String>) {
+    match result {
+        Ok(count) => {
+            st.set_filter.clear();
+            st.set_sel.clear();
+            notify(world, true, aurora_i18n::tr!("contacts-import-success", count = count));
+        }
+        Err(error) => {
+            log::warn!("contact import failed: {error}");
+            if let Some(preview) = &mut st.import_preview {
+                preview.failed = true;
+            }
+        }
+    }
+}
+
+fn poll_save(world: &mut World, st: &mut ContactsUi) {
+    let Some(PendingSave { preview, target, saving }) = st.import_saving.take() else {
+        return;
+    };
+    if preview.account != world.agent_id {
+        return;
+    }
+    let mut saving = Some(saving);
+    let result = world.contact_sets.finish_import(&mut saving, |id| world.social.is_friend(id));
+    if let Some(saving) = saving {
+        st.import_saving = Some(PendingSave { preview, target, saving });
+    } else if let Some(result) = result {
+        if result.is_ok() {
+            st.set_choice = target;
+        } else {
+            st.import_preview = Some(preview);
+        }
+        finish_shared_import(world, st, result.map_err(|e| e.to_string()));
+    }
+}
+
 pub(super) fn poll(world: &mut World, st: &mut ContactsUi) {
+    poll_save(world, st);
     if st.import_preview.as_ref().is_some_and(|p| p.account != world.agent_id) {
         st.import_preview = None;
     }
@@ -359,13 +404,15 @@ pub(super) fn show_preview(ctx: &egui::Context, p: &Palette, world: &mut World, 
             let choices = preview.choices();
             match world
                 .contact_sets
-                .import_choices(&preview.data, &choices, |id| world.social.is_friend(id))
+                .begin_import_choices(&preview.data, &choices, |id| world.social.is_friend(id))
             {
-                Ok(count) => {
+                Ok(Begun::Done(count)) => {
                     st.set_choice = choices.first().map(|c| c.target_name().to_owned());
-                    st.set_filter.clear();
-                    st.set_sel.clear();
-                    notify(world, true, aurora_i18n::tr!("contacts-import-success", count = count));
+                    finish_shared_import(world, st, Ok(count));
+                }
+                Ok(Begun::Saving(saving)) => {
+                    let target = choices.first().map(|c| c.target_name().to_owned());
+                    st.import_saving = Some(PendingSave { preview, target, saving });
                 }
                 Err(e) => {
                     log::warn!("contact import failed: {e}");

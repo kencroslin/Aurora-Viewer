@@ -348,6 +348,7 @@ impl App {
                 crate::ui::perf::set_full(&ctx, true);
                 crate::ui::widgets::open_floater(&ctx, "perf", &mut self.panels.perf);
             }
+            super::rlva_selftest::TOOL => self.request_rlva_selftest(),
             _ => {}
         }
     }
@@ -444,6 +445,7 @@ impl App {
                 None => tr!("dev-toolbox-no-target").to_string(),
             }),
             "N2" => Some(self.region_text()),
+            "J10" => Some(self.contacts_text()),
             "L1" => Some(self.cursor_text(renderer)),
             "L2" => Some(self.worn_text()),
             "L3" => Some(warnings_text(20, &AssetIds::diagnostics(&self.world))),
@@ -514,7 +516,7 @@ impl App {
     }
 
     /// The residents a copy may name: the avatars in the scene and us.
-    fn residents(&self) -> Vec<Resident> {
+    pub(super) fn residents(&self) -> Vec<Resident> {
         let mut out = Vec::new();
         for (_, o) in self.world.objects.avatars() {
             let mut names = Vec::new();
@@ -536,7 +538,7 @@ impl App {
 
     /// The window's live values, the target line and the last warnings.
     fn refresh_toolbox_view(&mut self, renderer: &Renderer) {
-        let ids: Vec<&'static str> = tools::TOOLS.iter().filter(|t| t.kind == Kind::Toggle).map(|t| t.id).collect();
+        let ids: Vec<&'static str> = tools::all().filter(|t| t.kind == Kind::Toggle).map(|t| t.id).collect();
         let on = ids.into_iter().filter(|id| self.toggle_on(id)).collect();
         let mut live: HashMap<&'static str, String> = HashMap::new();
         let warnings = crate::logging::recent_warnings(200);
@@ -715,6 +717,28 @@ impl App {
         let in_world = self.move_complete_at.map_or(0, |t| t.elapsed().as_secs() / 60);
         let _ = writeln!(out, "Language: {} · in world for {in_world} min", aurora_i18n::language());
         out
+    }
+
+    /// J10: the gates that hide the Contacts tab of Conversations, for a
+    /// report where the friends list does not show.
+    fn contacts_text(&self) -> String {
+        let style = self.chat_ui.demo_style.unwrap_or(self.chat_ui.style);
+        let torn_off = self.settings.contacts.torn_off;
+        tools::ContactsReport {
+            shown: self.settings.show_contacts_tab,
+            torn_off,
+            window_open: if torn_off { self.panels.contacts } else { self.panels.chat },
+            pane: if torn_off { self.panels.contacts } else { self.chat_ui.contacts },
+            workspace: style.workspace(),
+            column_collapsed: self.chat_ui.column.collapsed,
+            tab: self.settings.contacts.tab,
+            filter: self.chat_ui.column_filter(),
+            friends: self.world.social.friends.len(),
+            friends_online: self.world.social.friends.iter().filter(|f| f.online).count(),
+            groups: self.world.groups.groups.len(),
+            sets: self.world.contact_sets.set_names().len(),
+        }
+        .text()
     }
 
     /// N2: the region's state, without its name nor any address.

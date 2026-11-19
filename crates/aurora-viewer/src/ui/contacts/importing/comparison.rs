@@ -63,7 +63,7 @@ impl Cache {
                 .members(&self.delta)
                 .iter()
                 .map(|id| {
-                    let cached = names.get(id);
+                    let cached = names.get_in(crate::world::names::NameScope::Roster, id);
                     self.known += usize::from(cached.is_some() || world.social.names.contains_key(id));
                     let name = cached
                         .map(|n| n.complete(&names.options))
