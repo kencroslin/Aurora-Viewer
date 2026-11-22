@@ -4980,9 +4980,13 @@ impl World {
                 }
                 None
             }
-            NetEvent::InventoryUpdated { folders, items } => {
+            NetEvent::InventoryUpdated { folders, items, bulk } => {
                 self.reveal_added(&folders, &items);
-                self.inventory.server_updated(folders, items);
+                if bulk {
+                    self.inventory.bulk_updated(folders, items);
+                } else {
+                    self.inventory.server_updated(folders, items);
+                }
                 None
             }
             NetEvent::InventoryDelivery { transaction, folders } => {
@@ -6457,7 +6461,7 @@ impl World {
                     self.keyword_alert(id, &from, &n, true, attention::Open::NearbyChat);
                 }
                 // the name is a link to the resident (social::online_chat_line)
-                self.system_notice(social::online_chat_line(id, online), notice_topics::Topic::People);
+                self.system_notice(social::online_chat_line(id, online), notice_topics::Topic::Radar);
             }
         }
     }

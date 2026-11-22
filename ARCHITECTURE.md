@@ -1,5 +1,15 @@
 # Aurora Viewer architecture
 
+`imports::ImageSizeLimit` separates a draft's Default/1024/2048 choice from
+the shared persisted image limit beside Import. Effective options feed previews,
+quotes, deduplication and encoding; changing the general limit updates inherited
+drafts and invalidates affected previews and mesh quotes. Local restoration,
+reload and staging retain explicit overrides. `import_texture` accepts large
+local source images and reduces them during preparation, retaining source pixels
+for later limit changes. Material map file requests use a token per slot so a
+changed limit preserves files still loading without accepting an older selection.
+Network JPEG2000 decoding keeps its own budgets.
+
 `imports/mesh.rs` exposes Automatic through the retained `LodSource::Legacy` /
 `process::Method::Legacy` chain, and Reliable. Retired serialized generation
 choices alias to Legacy. Scene budgets reserve `process::minimum_lod_triangles`
@@ -2642,7 +2652,7 @@ and protection/worn state, then repeated on release. `drag_navigation.rs`
 toggles folders after a one-second hover, once per visit, independently of drop
 validity. It scrolls the actual inventory viewport (including virtualized search
 results) near its top/bottom edges and outside it vertically, with elapsed-time
-acceleration and ownership of the last entered inventory window. The final drag cursor and selection-count
+acceleration and ownership of the last entered inventory window; the scroll stops outside that window, under another one, and upward above its search row (`search_top`). `tab_held_over` opens a tab the cargo rests on (LLTabContainer::handleDragAndDrop), for the inventory's tabs and the build window's. The final drag cursor and selection-count
 badge are drawn after all windows. `drag_tests.rs` drives actual Ctrl-selection
 and pointer events; `drag_navigation_tests.rs` covers hover latching, scrolling,
 hidden sources, filtered lists, window ownership and cancellation.
@@ -2993,7 +3003,7 @@ Scripts use a shared editor (`ui/scripts.rs`, actions in `app/scripts.rs`) for i
 | `app/object_actions.rs` | Triggering of the actions, held touch, physical move, parcel playback, opening of media and camera framing |
 | `app/avatar_welcome.rs` | The Avatar Welcome Pack's folder commands, one after the other: the Library folder found by its name, copied into Clothing (its own items), then worn replacing or added to the outfit; `remove_folder` takes a folder off |
 | `app/contents_copy.rs` | "Copy to inventory" of an object's contents: the move warning of no-copy items, a new folder named after the object (under Clothing to wear it), MoveTaskInventory of each item, then the folder worn once all its items arrived |
-| `ui/controls.rs`, `app/controls.rs` | The Controls window (LLFloaterCamera, LLFloaterMove): camera and movement tabs whose joysticks and buttons are held keys (`App::update_move_input`), the four views, object view, saved camera positions (`camera::CameraShot`), or Firestorm's two windows (`Settings::classic_controls`); while the photo window's free camera flies, its camera tab drives it (`App::photo_free_camera` / `photo_free_move` in `app/snapshot.rs`: the movement keys and the window's buttons move the camera instead of the avatar) |
+| `ui/controls.rs`, `app/controls.rs` | The Controls window (LLFloaterCamera, LLFloaterMove): camera and movement tabs whose joysticks and buttons are held keys (`App::update_move_input`), the four views, object view, saved camera positions (`camera::CameraShot`), the Position button, or Firestorm's two windows (`Settings::classic_controls`); while the photo window's free camera flies, its camera tab drives it (`App::photo_free_camera` / `photo_free_move` in `app/snapshot.rs`: the movement keys and the window's buttons move the camera instead of the avatar) |
 | `game_control/`, `app/game_control.rs`, `ui/options/pages/game_controls.rs` | Game Controls, like the LL viewer 26.5 (LLGameControl, llgamecontrol.cpp): `mappings.rs` the actions of each mode (avatar, mouselook, flycam, seated, mouse cursor) and their default and saved bindings; `device.rs` each controller's options (offset, invert, dead zone, axis and button remapping, Auto calibrate) in LL's saved string; `engine.rs` the canonical and semantic state, the keyboard's share of it and the resend schedule of GameControlData (`aurora-net` `NetCommand::GameControlData`, sent only where the region's SimulatorFeatures carry `GameControlEnabled`); `actions.rs` what the controller does this frame; `flycam.rs` LLFlycam's flight. `app/game_control.rs` reads the joystick worker's gamepads each frame, sends the data and, while the Aurora gamepad profile is off, drives the avatar, the flycam, the cursor and simulated clicks; Preferences › Controls › Game Controls has LL's four tabs; `AURORA_DEMO_GAME_CONTROL` |
 | `ui/pay.rs`, `app/pay.rs` | Paying a resident, a group or (Aurora look) an object (LLFloaterPay): quick and free amounts, message, confirmation above a threshold, Buy L$ for what is missing, the server's answer; Firestorm's window as the classic look of Preferences › Aurora |
 | `ui/money_tracker.rs`, `ui/money_tracker/`, `app/money_tracker.rs` | Money tracker (FSMoneyTracker): the L$ received and paid during the session from MoneyBalanceReply's TransactionInfo, while open or always (Track when closed); its list, totals, selection, CSV copy and undo in `money_tracker.rs`, the Aurora look in `aurora.rs`, the Legacy Viewer's window in `legacy.rs`; what is recorded and when, the actions and the demo in the app bridge |
@@ -3147,6 +3157,7 @@ Scripts use a shared editor (`ui/scripts.rs`, actions in `app/scripts.rs`) for i
 | `grid_status.rs`, `grid_status/tests.rs`, `ui/grid_status.rs`, `app/grid_status.rs`, `demo_grid_status.rs` | Help › Grid status and the toolbar's Grid status command (LLFloaterGridStatus): the grid's status feed (Second Life's Atom feed, an OpenSim grid's `OpenSimExtras` `GridStatusRSS`), fetched off the frame every 60 s while the command stands on a toolbar or the window is open, read as entries and updates (Atom or RSS 2.0, the status page's HTML), and the new or changed entries that flash the button (`grid_status.rs`); the native window listing them (`ui/grid_status.rs`); the polling, the flash and the window in the frame (`app/grid_status.rs`); the demo feed (`AURORA_DEMO_GRID_STATUS`) |
 | `pose_stand.rs`, `ui/pose_stand.rs`, `app/pose_stand.rs`, `demo_pose_stand.rs` | The toolbar's pose stand (FSFloaterPoseStand, FSPose): the eleven poses of posestand.xml, the opening and closing rules as ordered effects (the AO paused, the optional ground lock, every animation stopped, the pose started and stopped through AgentAnimation), the FSPoseStandLock / FSPoseStandLastSelectedPose settings (`pose_stand.rs`); the window, a list of poses and the lock (`ui/pose_stand.rs`); the effects sent and the window's opening / closing followed each frame (`app/pose_stand.rs`); the offline scenario (`AURORA_DEMO_POSE_STAND`) |
 | `settings/registry.rs` | The settings by name (`camera.fov`), read from their serialised form so that the list cannot drift: kind, value, default, and a change that goes back through the settings' deserialisation and `sanitized`. Keeps out the login, this PC's values, service keys and any text holding a UUID; `Locks` is the rule for what RLVa holds |
+| `ui/camera_position.rs` | The camera position window (LLFloaterPreferenceViewAdvanced) of the Controls window's Position button: the live camera and focus offsets and the distance, Reset angles, save as a camera position; its offset fields are also Preferences › Camera's, and keep a value set past their range |
 | `ui/debug_settings.rs`, `app/debug_settings.rs` | The Debug Settings window (LLFloaterSettingsDebug) over `settings/registry.rs`: search, changed only, the editor of each kind, Copy name, Reset, the warning; a setting's comment is what Preferences says of it (`options::describe_settings`) |
 | `ui/quick_prefs.rs`, `app/quick_prefs.rs` | The toolbar's Quick preferences command (FloaterQuickPrefs): seven of the nine default rows of the Legacy Viewer's quick_preferences.xml (Tags Offset and Color Under Cursor have no Aurora setting) bound to the typed settings Preferences edits (each row sets the same field with the same clamp), Hover Height, Max Bandwidth, Max Complexity, and the environment block shared with the Environment window (`EnvironmentUi::selector_body`); changes are applied and saved like Preferences' (`ui/quick_prefs.rs`); the window in the frame and its demo (`app/quick_prefs.rs`, `AURORA_DEMO_QUICKPREFS`) |
 | `ui/phototools.rs`, `ui/options/phototools.rs`, `app/phototools.rs` | The toolbar's Phototools command (FloaterPhototools, floater_phototools.xml): the window's tabs and collapsing sections in the Legacy Viewer's order (Environment, Light, Depth of field & glow and General so far; the others appear with their changes; while the photo window is open the rows it overrides are its own values, `options::PhotoLayer`), the environment block shared with the Environment window (`EnvironmentUi::selector_body`), and the rows of Preferences it borrows (`Cx::borrow`, one call per row so that the Legacy order wins) through `options::phototools_section`, with an `OptionsUi` of its own fed by `OptionsUi::share_from`. The Legacy rows left out are listed at the top of `ui/options/phototools.rs`. `app/phototools.rs` applies a change like a change of Preferences and opens the new-preset editors. |
@@ -3933,7 +3944,7 @@ with the application (`app/color_picker.rs`).
 `ui/widgets/workspace.rs` shares the navigation, the detail panels, the
 dialogs and the rows of the user inventory and of object contents
 (density, hover, selection and name style). `build/ui/compact.rs` arranges
-building in five sections in a compact inspector: General includes identity, group/share/deed, everyone/next-owner permissions before Click to, sale and search. Five tools share the configurable icon rail. Its visible rows set the minimum window height; the rail never uses a scrollbar, and short screens constrain the independently scrollable editing panels first. Position/size/rotation and their independent copy/paste controls occupy a full-width folding area; three reference icons and the settings gear sit in its right strip or folded bar. Option rows and whole manipulation/action toolbars can move between footer, side settings and hidden storage; rail icons can move between the rail and hidden storage. Organization disables ordinary control actions without changing their geometry. Layout and fold state are local preferences shared by every account in the global settings file. Versioned notecards export only construction settings and layout. Existing command permissions, drafts, material updates and object history remain authoritative. The object inventory fills the remaining section viewport. Native regressions cover pointer organization, checkbox row geometry, profile validation/roundtrip and existing material/content keyboard interactions.
+building in five sections in a compact inspector: General includes identity, group/share/deed, everyone/next-owner permissions before Click to, sale and search. Two button bars (top and bottom) take any of the five section and five tool buttons, each shown by its icon, its label or both (its right-click menu). `build/ui/detach.rs` takes a section or the transform block out into a window of its own (Alt+drag a bar button or the block, `BuildSettings::detached`): the button then shows or hides that window, which follows the build window, opens at a size fitted to its block, and goes back in when dragged onto the build window; the transform block's window has no title bar (`Floater::headless`, a small close box outside its edge) and `build/ui/object.rs` lays its X / Y / Z out by width, down to one under the other. Inventory held over a section button, the PBR / Blinn-Phong tabs or the inventory's tabs opens it after 0.2 s (`drag_navigation::tab_held_over`). Its visible rows set the minimum window height; the rail never uses a scrollbar, and short screens constrain the independently scrollable editing panels first. Position/size/rotation and their independent copy/paste controls occupy a full-width folding area; three reference icons and the settings gear sit in its right strip or folded bar. Option rows and whole manipulation/action toolbars can move between footer, side settings and hidden storage; rail icons can move between the rail and hidden storage. Organization disables ordinary control actions without changing their geometry. Layout and fold state are local preferences shared by every account in the global settings file. Versioned notecards export only construction settings and layout. Existing command permissions, drafts, material updates and object history remain authoritative. The object inventory fills the remaining section viewport. Native regressions cover pointer organization, checkbox row geometry, profile validation/roundtrip and existing material/content keyboard interactions.
 World / Local / Reference use three persistent icon buttons: vertical at the
 top of the expanded transform strip, horizontal in its folded bar, with a violet
 face for the active mode and muted inactive icons. Rez-under-land-group is in
@@ -3941,9 +3952,11 @@ side settings by default and remains available in Edit and Create. Linked-prim
 and face navigation have separate arrows.
 The shared Floater supports a compact status row in its title; construction
 uses independent lock, no-mod and ownership states. Material projection/options
-are inline rather than collapsed. Materials show three large Blinn-Phong previews
-in one row. PBR uses the same square size in a three-column grid: an actual GPU
-material preview followed by its four maps. The shared material preview cache
+are inline rather than collapsed. Materials list the Blinn-Phong maps in one
+column of 56-pixel swatches. PBR, the first sub-tab, pairs the same swatches in
+rows: an actual GPU material preview with the base colour, normal with emissive,
+then metallic-roughness; "Save material as" sends the selected faces' material
+to the inventory under `build::texture_copy::material_save_allowed`. The shared material preview cache
 builds the effective asset plus face overrides on scene workers. Tint, surface,
 lighting and per-channel UV controls follow below
 through the same native edit transactions; rectangular tint swatches use the
@@ -4446,7 +4459,11 @@ the libgcc unwinder's frames through the signal frame, then each frame as
 the unwinder and the loader's list under an alarm (another thread that
 crashes meanwhile waits for the file); it then hands the signal
 to the standard library's overflow handler or the default action, so the
-process ends as before. Panics and failed allocations get the same stacks. `threads.rs` names the
+process ends as before. A fault at an address where nothing is mapped is
+written without the unwinder, which would fault there in turn; and a fatal
+signal that a library gave its own handler (NVIDIA's shader compiler takes
+SIGABRT at its first compile) is taken back, every second by the watchdog
+and once the renderer is dropped at exit. Panics and failed allocations get the same stacks. `threads.rs` names the
 long-lived background threads the session cannot do without (network
 runtime, texture pages, frees, disk caches, chat history): their panic,
 which used to leave the viewer running without them, ends the session at
@@ -4839,7 +4856,13 @@ popup behavior. Its set selector and enable switch edit the same account as
 the manager; swim/water-walk and run/flight boosts edit existing movement
 preferences and retain the selected set's swimming-readiness gate. Child set
 menus keep the parent open; Escape/outside clicks dismiss it, and the manager
-button opens the existing floater. `ui/ao/category.rs` partitions every state
+button opens the existing floater. The popup and persistent `ui/ao/mini.rs`
+window share the state-step controls and show the current state and animation;
+the shared controls include the set's sit override. The mini window can be
+pinned from the popup (which expands it when minimized), toggled from the
+toolbar, and is remembered per account; its Settings button opens the manager
+beside it.
+`ui/ao/category.rs` partitions every state
 into General, Ground, Jumping, Flying and Swimming, in that order. General
 contains Standing, Sitting, Sitting on ground, Standing up, Typing and Always,
 with the sitting states immediately after Standing. Ground groups walking/running,

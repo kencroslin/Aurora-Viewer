@@ -426,7 +426,7 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
         );
         ui.add_space(4.0);
     }
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 5.0;
         if !compact {
             // room for the pills, Invite and Export
@@ -644,22 +644,31 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
         ui.label(egui::RichText::new(aurora_i18n::tr!("common-loading-2")).size(12.5).color(p.muted));
         return;
     };
-    // compact: the count's own line above the buttons
-    let footer_h = if compact { 64.0 } else { 44.0 };
-    let list_h = (ui.available_height() - footer_h).max(ROW_H * 2.0);
-    let list_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(width + tick_w, list_h));
-    contact_keyboard(ui, &mut st.members, list_rect, v.id);
+    // Larger fonts can wrap the actions. Reserve their measured height,
+    // keeping the list and its buttons inside their own column.
+    let (mut list_ui, footer) = widgets::above_footer(ui);
+    let list_h = list_ui.available_height();
+    let list_rect = Rect::from_min_size(list_ui.cursor().min, Vec2::new(width + tick_w, list_h));
+    contact_keyboard(&mut list_ui, &mut st.members, list_rect, v.id);
     let today = today();
     let count = st.members.rows.len();
     let mut open_profile = None;
     let target = st.members.selected.or_else(|| st.members.checked.first().copied());
     let selected_row = st.members.rows.iter().position(|(id, _)| Some(*id) == target);
-    widgets::search_scroll_to_row(ui, egui::ScrollArea::vertical(), selected_row, ROW_H)
+    widgets::search_scroll_to_row(&list_ui, egui::ScrollArea::vertical(), selected_row, ROW_H)
         .id_salt("group_members_rows")
         .max_height(list_h)
         .auto_shrink([false, false])
-        .show_rows(ui, ROW_H, count, |ui, range| {
+        .show_rows(&mut list_ui, ROW_H, count, |ui, range| {
             ui.spacing_mut().item_spacing.y = 0.0;
+            if count == 0 {
+                let text = if d.members_complete {
+                    aurora_i18n::tr!("ui-group-profile-no-member-found")
+                } else {
+                    aurora_i18n::tr!("common-loading-2")
+                };
+                ui.label(egui::RichText::new(text).size(12.5).color(p.muted));
+            }
             for i in range {
                 let (id, name) = st.members.rows[i].clone();
                 let Some(m) = d.members.get(&id) else { continue };
@@ -799,48 +808,35 @@ fn list(st: &mut GroupProfileUi, ui: &mut egui::Ui, c: &mut Ctx, env: &Env, v: &
                 }
             }
         });
-    if count == 0 {
-        let text = if d.members_complete {
-            aurora_i18n::tr!("ui-group-profile-no-member-found")
-        } else {
-            aurora_i18n::tr!("common-loading-2")
-        };
-        ui.label(egui::RichText::new(text).size(12.5).color(p.muted));
-    }
     if let Some(id) = open_profile {
         context::request(ui.ctx(), CtxAction::RosterProfile(id));
     }
 
     // the selection's buttons
-    ui.add_space(6.0);
-    st.members.checked.retain(|id| d.members.contains_key(id));
-    let targets: Vec<Uuid> = st.members.targets().into_iter().filter(|id| d.members.contains_key(id)).collect();
-    let (can_eject, can_ban) = admin_members::eject_and_ban(d, &me(c, v), &targets);
-    let selected = (targets.len() == 1).then(|| targets[0]);
-    let selected_count = if st.members.contacts.is_empty() {
-        targets.len()
-    } else {
-        st.members.contacts.len()
-    };
-    let text = if selected_count > 0 {
-        aurora_i18n::tr!("ui-group-admin-selected", count = selected_count as i64)
-    } else {
-        aurora_i18n::tr!(
-            "ui-group-profile-shown",
-            count = count as i64,
-            shown = aurora_i18n::integer(count as i64)
-        )
-    };
-    // compact: the count on its own line, the buttons under it
-    if compact {
-        ui.label(egui::RichText::new(text.as_str()).size(12.0).color(p.muted));
-    }
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 5.0;
-        if !compact {
-            ui.label(egui::RichText::new(text).size(12.0).color(p.muted));
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    footer.show(ui, |ui| {
+        ui.add_space(6.0);
+        st.members.checked.retain(|id| d.members.contains_key(id));
+        let targets: Vec<Uuid> = st.members.targets().into_iter().filter(|id| d.members.contains_key(id)).collect();
+        let (can_eject, can_ban) = admin_members::eject_and_ban(d, &me(c, v), &targets);
+        let selected = (targets.len() == 1).then(|| targets[0]);
+        let selected_count = if st.members.contacts.is_empty() {
+            targets.len()
+        } else {
+            st.members.contacts.len()
+        };
+        let text = if selected_count > 0 {
+            aurora_i18n::tr!("ui-group-admin-selected", count = selected_count as i64)
+        } else {
+            aurora_i18n::tr!(
+                "ui-group-profile-shown",
+                count = count as i64,
+                shown = aurora_i18n::integer(count as i64)
+            )
+        };
+        // The count stays readable above the actions, even when they wrap.
+        ui.label(egui::RichText::new(text).size(12.0).color(p.muted));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true), |ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
             let size = Vec2::new(0.0, 28.0);
             contact_add_button(ui, p, c.world, &st.members);
             // Eject / Ban with the abilities (handleMemberSelect's rules)
