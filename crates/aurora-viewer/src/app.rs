@@ -17004,6 +17004,17 @@ impl App {
         if let Some(c) = a.chat {
             self.send_local_chat(c);
         }
+        for (to, chat) in a.im_channels {
+            let channel = chat.channel.to_string();
+            // Use the ordinary local-chat path, including its RLVa boundary.
+            // A local notice only: never send the command or confirmation as an IM.
+            self.send_local_chat(chat);
+            self.world.conversation_notice(
+                to,
+                aurora_i18n::tr!("custom-im-channel-routed", channel = channel),
+                crate::world::notice_topics::Topic::Info,
+            );
+        }
         self.update_local_typing();
         for cmd in a.typing {
             self.send(cmd);
@@ -20609,6 +20620,7 @@ impl App {
                 // AURORA_DEMO_EMOTES=…:on: for the run, nothing saved
                 self.chat_ui.group_emotes = self.settings.group_emotes || (self.demo && crate::demo::emotes_grouped());
                 self.chat_ui.show_channel = self.settings.show_chat_channel || self.chat_ui.demo_channel;
+                self.chat_ui.set_im_channel_commands(self.settings.im_channel_commands);
                 // the Legacy chat style keeps its own switch; both are off by
                 // default, the demo switch shows the row whatever they say
                 self.chat_ui.recent_emojis.enabled = (self.demo && crate::demo::recent_emojis_on())
@@ -20858,6 +20870,7 @@ impl App {
                             }
                         }
                         ui::chat::ConvAction::Local(out) => a.chat = Some(out),
+                        ui::chat::ConvAction::ImChannel { to, chat } => a.im_channels.push((to, chat)),
                         ui::chat::ConvAction::Im { to, text } => a.ims.push((to, text)),
                         ui::chat::ConvAction::SendSysinfo(to) => a.sysinfo.push(to),
                         ui::chat::ConvAction::OfferTeleport(id) => a.offer_tp.push(id),
@@ -22531,6 +22544,7 @@ struct UiActions {
     update_quit: bool,
     login: LoginAction,
     chat: Option<ui::chat::OutgoingChat>,
+    im_channels: Vec<(uuid::Uuid, ui::chat::OutgoingChat)>,
     bar: BarAction,
     settings_changed: bool,
     ui_scale_changed: bool,

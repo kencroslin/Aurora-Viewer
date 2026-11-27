@@ -2280,6 +2280,58 @@ fn the_field_acts() {
 }
 
 #[test]
+fn im_channels_work_in_every_conversation_style() {
+    for style in ALL {
+        let mut h = H::new(style);
+        for to in [JANE, GROUP] {
+            h.st.set_im_channel_commands(false);
+            h.open(Some(to));
+            h.st.conv_focus_request = true;
+            h.settle();
+            h.type_text("/123 literal");
+            h.enter(Default::default());
+            assert!(has(
+                &h.take(),
+                |a| matches!(a, ConvAction::Im { to: dest, text } if *dest == to && text == "/123 literal")
+            ));
+
+            h.st.set_im_channel_commands(true);
+            h.open(Some(to));
+            assert!(h.shown(control_id("box-channel").with(to)).is_some());
+            for (line, selected, expected) in [
+                ("/123 menu", 0, Some((123, "menu"))),
+                ("/-500 status", 0, Some((-500, "status"))),
+                ("menu", 42, Some((42, "menu"))),
+                ("hi", 0, None),
+                ("/0 text", 42, None),
+                ("/me waves", 0, None),
+            ] {
+                h.st.im_channels.insert(to, selected);
+                h.st.conv_focus_request = true;
+                h.settle();
+                h.type_text(line);
+                h.enter(Default::default());
+                let actions = h.take();
+                match expected {
+                    Some((channel, message)) => {
+                        assert!(has(
+                            &actions,
+                            |a| matches!(a, ConvAction::ImChannel { to: dest, chat } if *dest == to && chat.channel == channel && chat.message == message)
+                        ));
+                        assert!(!has(&actions, |a| matches!(a, ConvAction::Im { .. })));
+                    }
+                    None => assert!(has(
+                        &actions,
+                        |a| matches!(a, ConvAction::Im { to: dest, text } if *dest == to && text == line)
+                    )),
+                }
+                assert_eq!(h.st.im_channels.get(&to).copied().unwrap_or(0), 0);
+            }
+        }
+    }
+}
+
+#[test]
 fn the_channel_selector_works_in_every_conversation_style() {
     for style in ALL {
         let mut h = H::new(style);

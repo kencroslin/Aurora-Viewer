@@ -196,7 +196,7 @@ pub(super) fn show(
                         // area, whose bar runs along the box's right edge.
                         // The Legacy Viewer's selector remains available at
                         // every width; `/n` also works when it is hidden.
-                        let chip = local && st.show_channel;
+                        let chip = st.show_conversation_channel();
                         let chip_w = if chip { super::channel::RESERVED_WIDTH } else { 0.0 };
                         let beside = chip_w + BUTTON + 8.0;
                         let area_w = ui.available_width();
@@ -251,9 +251,8 @@ pub(super) fn show(
                             |ui| {
                                 ui.spacing_mut().item_spacing.x = 4.0;
                                 send_clicked = send_button(ui, p, has_text).clicked() && has_text;
-                                // `chip` is only for the nearby chat
                                 if chip {
-                                    super::channel::show(ui, p, &mut st.chat_channel, sidebar::control_id("box-channel"));
+                                    st.conversation_channel_chip(ui, p);
                                 }
                             },
                         );
@@ -350,7 +349,7 @@ pub(super) fn show(
                                 chat_type: send.chat_type(volume),
                             }));
                         }
-                        Some(to) => actions.push(ConvAction::Im { to, text }),
+                        Some(to) => actions.push(st.im_action(to, text)),
                     }
                     st.used_conversation(st.selected);
                 }

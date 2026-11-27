@@ -268,6 +268,10 @@ pub struct ChatUi {
     /// one for every nearby chat field, kept from one message to the next
     /// for the session, used when the text has no `/n` (`channel::resolve`).
     pub chat_channel: i32,
+    /// Custom fork: opt-in script commands from IMs. The selector is scoped
+    /// to a conversation and resets after sending, so the next line is an IM.
+    pub im_channel_commands: bool,
+    im_channels: HashMap<uuid::Uuid, i32>,
     /// Typing notices are sent (Preferences › Chat), given every frame by
     /// the app.
     pub send_typing: bool,
@@ -530,6 +534,7 @@ impl ChatUi {
         self.searches.remove(&Some(conversation));
         self.views.remove(&Some(conversation));
         self.drafts.remove(&Some(conversation));
+        self.im_channels.remove(&conversation);
         self.input_history.remove(&Some(conversation));
         self.popped.remove(Some(conversation));
     }
@@ -559,6 +564,8 @@ impl ChatUi {
             self.picker_view = Some((new, contacts));
         }
         self.popped.rekey(from, to);
+        // A newly assigned conversation ID starts in normal IM mode.
+        self.im_channels.remove(&from);
         if let Some(draft) = self.drafts.remove(&old) {
             self.drafts.insert(new, draft);
         }
@@ -612,6 +619,47 @@ impl ChatUi {
     /// FSNearbyChat::handleChatBarKeystroke given the spinner's channel.
     pub fn selector_channel(&self) -> Option<i32> {
         self.show_channel.then_some(self.chat_channel)
+    }
+
+    pub fn set_im_channel_commands(&mut self, enabled: bool) {
+        self.im_channel_commands = enabled;
+        if !enabled {
+            self.im_channels.clear();
+        }
+    }
+
+    fn show_conversation_channel(&self) -> bool {
+        if self.selected.is_some() {
+            self.im_channel_commands
+        } else {
+            self.show_channel
+        }
+    }
+
+    fn conversation_channel_chip(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let id = sidebar::control_id("box-channel");
+        if let Some(to) = self.selected {
+            channel::show_im(ui, p, self.im_channels.entry(to).or_default(), id.with(to));
+        } else {
+            channel::show(ui, p, &mut self.chat_channel, id);
+        }
+    }
+
+    fn im_action(&mut self, to: uuid::Uuid, text: String) -> ConvAction {
+        let selected = self.im_channels.remove(&to).unwrap_or(0);
+        if self.im_channel_commands
+            && let Some((channel, message)) = channel::resolve_im(&text, selected)
+        {
+            return ConvAction::ImChannel {
+                to,
+                chat: OutgoingChat {
+                    channel,
+                    message,
+                    chat_type: ChatType::Normal,
+                },
+            };
+        }
+        ConvAction::Im { to, text }
     }
 
     /// The chat bar is drawn this frame: always, never with "Conversations
@@ -1845,6 +1893,10 @@ pub enum ConvAction {
     /// The column's button changed `ColumnChoice::collapsed`: to keep.
     ColumnCollapsed(bool),
     Local(OutgoingChat),
+    ImChannel {
+        to: uuid::Uuid,
+        chat: OutgoingChat,
+    },
     Im {
         to: uuid::Uuid,
         text: String,
@@ -4825,7 +4877,7 @@ fn classic_pane(
             }
             // leave exactly the send button + spacing (else the row overflows
             // and the resizable window grows every frame)
-            let show_channel = st.selected.is_none() && st.show_channel;
+            let show_channel = st.show_conversation_channel();
             let channel_w = if show_channel { channel::RESERVED_WIDTH } else { 0.0 };
             let field_w = (ui.available_width() - SEND_BTN_W - ui.spacing().item_spacing.x - channel_w)
                 .floor()
@@ -4851,7 +4903,7 @@ fn classic_pane(
             };
             suggest::after(ui, p, &mut output, &mut draft, suggest_nav, &mut st.suggest, scope);
             if show_channel {
-                channel::show(ui, p, &mut st.chat_channel, sidebar::control_id("box-channel"));
+                st.conversation_channel_chip(ui, p);
             }
             let has_text = !draft.trim().is_empty();
             send_clicked = send_button(ui, p, icons, has_text).clicked() && has_text;
@@ -4970,7 +5022,7 @@ fn classic_pane(
                         chat_type: send.chat_type(ChatType::Normal),
                     }));
                 }
-                Some(to) => actions.push(ConvAction::Im { to, text }),
+                Some(to) => actions.push(st.im_action(to, text)),
             }
             st.used_conversation(st.selected);
         }

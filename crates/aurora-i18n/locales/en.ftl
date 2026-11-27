@@ -16908,3 +16908,9 @@ phototools-director-lens = The Director's lens is shown while its window is open
 phototools-view-angle-viewfinder = The viewfinder owns the view angle: yours comes back when it closes.
 ui-options-dof-show-focus-point = Show focus point
 ui-options-dof-show-focus-point-help = A small crosshair on the point the lens focuses on: yellow when it is free, red when it is locked.
+
+# Custom viewer: local script commands from IMs
+custom-im-channel-commands = Send channel commands from IMs
+custom-im-channel-commands-hint = Type /123 command in an IM to send it to a local script channel instead of the recipient. Choose a channel for one message with the IM button. Channel 0 and the debug channel remain IMs.
+custom-im-channel-reset = Back to IM
+custom-im-channel-routed = Command routed to local channel /{ $channel } (not sent as an IM).

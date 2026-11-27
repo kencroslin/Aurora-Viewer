@@ -218,6 +218,11 @@ pub fn page(cx: &mut Cx, tab: usize) {
             cx.group(tr!("ui-options-conversations"), |cx| {
                 // FSShowTimestampsIM (on): private and group conversations
                 cx.toggle(tr!("ui-options-show-time"), "", &field!(chat_timestamps_im));
+                cx.toggle(
+                    tr!("custom-im-channel-commands"),
+                    tr!("custom-im-channel-commands-hint"),
+                    &field!(im_channel_commands),
+                );
                 if cx.toggle(
                     tr!("ui-options-show-contacts-tab"),
                     tr!("ui-options-show-contacts-tab-hint"),

@@ -16725,3 +16725,9 @@ phototools-director-lens = ディレクターのウィンドウが開いてい�
 phototools-view-angle-viewfinder = 視野角はファインダーが管理しています。ファインダーを閉じると元の値に戻ります。
 ui-options-dof-show-focus-point = フォーカス点を表示
 ui-options-dof-show-focus-point-help = レンズがピントを合わせている点に小さな十字を表示します。自由なときは黄色、ロック中は赤です。
+
+# Custom viewer: local script commands from IMs
+custom-im-channel-commands = IMからチャンネルコマンドを送信
+custom-im-channel-commands-hint = IMで /123 コマンド と入力すると、相手ではなくローカルのスクリプトチャンネルに送信します。IMボタンで1回限りのチャンネルを選択できます。チャンネル0とデバッグチャンネルはIMのままです。
+custom-im-channel-reset = IMに戻す
+custom-im-channel-routed = コマンドをローカルチャンネル /{ $channel } に振り分けました（IMとしては送信していません）。

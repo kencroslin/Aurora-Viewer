@@ -16915,3 +16915,9 @@ phototools-director-lens = L'objectif du Réalisateur est affiché tant que sa f
 phototools-view-angle-viewfinder = Le viseur gère l'angle de vue : le vôtre revient à sa fermeture.
 ui-options-dof-show-focus-point = Afficher le point de mise au point
 ui-options-dof-show-focus-point-help = Une petite croix sur le point où l'objectif fait la mise au point : jaune quand il est libre, rouge quand il est verrouillé.
+
+# Custom viewer: local script commands from IMs
+custom-im-channel-commands = Envoyer des commandes de canal depuis les IM
+custom-im-channel-commands-hint = Saisissez /123 commande dans un IM pour l’envoyer à un canal de script local au lieu du destinataire. Le bouton IM permet de choisir un canal pour un seul message. Le canal 0 et le canal de débogage restent des IM.
+custom-im-channel-reset = Revenir à l’IM
+custom-im-channel-routed = Commande dirigée vers le canal local /{ $channel } (non envoyée en IM).

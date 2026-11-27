@@ -1024,6 +1024,8 @@ pub struct Settings {
     /// off by default; Preferences > Chat). "/n" before the text works
     /// without it.
     pub show_chat_channel: bool,
+    /// Allow local script-channel commands from personal and group IMs.
+    pub im_channel_commands: bool,
     /// The emojis used last as a row above the chat fields (Preferences >
     /// Chat; off, the human's choice of 2026-11-10; no room before a first
     /// emoji is sent).
@@ -2681,6 +2683,7 @@ impl Default for Settings {
             chat_timestamps_im: true,
             former_chat_timestamps: None,
             show_chat_channel: false,
+            im_channel_commands: false,
             show_recent_emojis: false,
             show_recent_emojis_legacy: false,
             favorite_emojis: false,
@@ -5616,6 +5619,19 @@ mod tests {
         let saved = serde_json::to_vec(&original).expect("serialize synthetic preference");
         let loaded: Settings = serde_json::from_slice(&saved).expect("reload synthetic preference");
         assert!(loaded.sanitized().show_recent_emojis);
+    }
+
+    #[test]
+    fn im_channel_commands_are_opt_in_and_survive_reload() {
+        assert!(!Settings::default().im_channel_commands);
+        let old: Settings = serde_json::from_str("{}").expect("synthetic old settings");
+        assert!(!old.im_channel_commands);
+        let enabled = Settings {
+            im_channel_commands: true,
+            ..Settings::default()
+        };
+        let loaded: Settings = serde_json::from_slice(&serde_json::to_vec(&enabled).unwrap()).unwrap();
+        assert!(loaded.sanitized().im_channel_commands);
     }
 
     #[test]
