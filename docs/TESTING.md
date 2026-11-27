@@ -1115,6 +1115,7 @@ when unfocused") is ignored during a screenshot.
 |---|---|
 | `AURORA_DEMO_CAM="yaw,pitch,dist"` | Places the camera around the avatar |
 | `AURORA_DEMO_CAMERA=<scenario>` | Camera scenario (see Details), including `head-follow`, `pelvis-follow` and `hand-follow` |
+| `AURORA_DEMO_DIRECTOR_SHUTTER=<degrees>` | With `AURORA_DEMO_DIRECTOR`, the Director's motion blur on at that shutter angle (1 to 720), its render with a true shutter (see Details) |
 | `AURORA_DEMO_DIRECTOR=1\|play\|lock\|green\|record\|record-alpha\|orbit\|capture\|anim\|montage\|titles\|render` | The Director open on a track of four keyframes around the avatar, that track playing, the view locked on the avatar's neck, the avatar alone on a green screen, a second of the track recorded, the track replaced by an orbit shot round the avatar, a path flown by hand made keyframes, keyframes with an animation, a lens and a time of day, a montage of two shots, fades and titles played, or a second rendered as PNG images (see Details) |
 | `AURORA_DEMO_DIRECTOR_FILM=<file>` | The Director's recording writes its raw frames to that file, with no encoder (see Details) |
 | `AURORA_DIRECTOR_FFMPEG=pack` | The Director looks for no ffmpeg but the project's pack, to try its download on a computer that has ffmpeg (see Details) |
@@ -1285,7 +1286,13 @@ when unfocused") is ignored during a screenshot.
   `Aurora_00024.png` in a new `Aurora_<date>` folder of `<Videos>/Aurora
   Viewer`, the first black, the title in the middle, the last black,
   whatever the window's size; the Output section shows the progress
-  meanwhile.
+  meanwhile. With `AURORA_DEMO_DIRECTOR_SHUTTER=<degrees>` (1 to 720) the
+  Director's motion blur is on at that shutter: its live view and live
+  films blur along the motion vectors, and `render` draws each frame as
+  sub-frames over the time the shutter stays open, averaged (the log adds
+  `shutter open 20.8 ms in 12 sub-frames` at 180°, 24 a second); the
+  orbiting camera and the walking avatars leave smooth streaks, with no
+  doubled images, and the render takes as many times longer.
 - **`AURORA_DEMO_CROSSHAIR=dot|cross|circle|legacy|off|image:<file>`**: the crosshair of
   Preferences › Camera › Mouselook › Crosshair in that shape for the
   session, nothing saved (`cross` and `circle` with their centre dot; `off`:
@@ -4988,6 +4995,7 @@ both open states and the selection count. Capture at frame 620.
 | `AURORA_FOG_COLOUR=sky\|<r>,<g>,<b>` | The fog's colour (the sky's light, or its own in sRGB 0..1) until the Aurora Weather window is used |
 | `AURORA_DEMO_FOG=sunset\|neon\|indoor\|underwater\|shelter\|aerial\|ground` | Fog under a fixed sky with props and a placed camera |
 | `AURORA_DEMO_FOG_SWING=<degrees>` | The fog scene's camera swings side to side, through its view at full speed every 100 frames |
+| `AURORA_SUN_RAYS=<0..1>\|off` | The sun's and the moon's shafts at this strength, or none, whatever Preferences say (see Details) |
 
 ### Details
 
@@ -5026,6 +5034,17 @@ both open states and the selection count. Capture at frame 620.
   meet without a seam; under the height fog, a room under a roof stays
   clear (the shelter map, three taps along each view).
 
+- **Sun and moon rays (`AURORA_SUN_RAYS`)**: Preferences › Graphics ›
+  "Sun and moon rays" for this launch only: `<0..1>` their strength, `off`
+  (or `0`) none. A post process (`sun_shafts.rs`): the sky around the sun
+  (the moon at night) streaked from it across the image, cut by what
+  stands in front; nothing behind the camera, fading as the light leaves
+  the view's axis and as it sets; none in debug views, cut-out photos and
+  photos drawn in tiles. Compare `AURORA_DEMO_FOG=sunset AURORA_FOG=off
+  AURORA_SUN_RAYS=0.7` (dark streaks behind the posts and the torus in the
+  low sun's light, the ground beside them as without) against
+  `AURORA_SUN_RAYS=off`. `AURORA_PROFILE=1` counts their GPU time in
+  `g_bloom`.
 - **Weather (`AURORA_RAIN`, `AURORA_SNOW*`, `AURORA_THUNDER_*`)**: the
   weather of the Aurora Weather window is drawn for
   this viewer only. `AURORA_RAIN=<0..1>` sets the rain (0 none, 1 a
@@ -9595,12 +9614,16 @@ failure. Grid validation and any paid upload are performed by the human.
   the emoji at the caret; a message sent moves its emojis to the front.
   Unset, the row takes no room until a first emoji is sent. Set, the row
   shows even though Preferences › Chat › Show recent emojis is off by
-  default. The Legacy bars
+  default, and the arrow before the emoji buttons (the chat bar's, the
+  Conversations composers') hides and shows it for the run: down while the
+  row is shown, up while it is hidden. Unset, the arrow turns the
+  Preferences switch itself, which is saved. The Legacy bars
   (`AURORA_DEMO_BARS=legacy`) have no emojis in their field, so no row.
-- **`AURORA_DEMO_FAVORITE_EMOJIS=<emojis>`**: the favourites, turned on for
-  the run whatever Preferences › Chat › Favorite emojis says: first in the row with a small star, and the emoji picker opening on their
+- **`AURORA_DEMO_FAVORITE_EMOJIS=<emojis>`**: the favourites of the run:
+  first in the row with a small star, and the emoji picker opening on their
   tab (with `AURORA_DEMO_BARS=emoji`). The right-click menu of an emoji in
-  the row or the picker adds or removes one. Nothing is saved.
+  the row or the picker adds or removes one, and holds nothing else, in
+  the chat bar too. Nothing is saved.
 - **`AURORA_DEMO_EMOJI_CODES=<text>`**: the Conversations window open, its
   input holding `<text>` with the keyboard and the caret at the end
   (`ui/emoji/codes.rs`). With `hi :hea`, the list of suggestions opens
@@ -10057,7 +10080,11 @@ Human grid validation: remember MFA for account A and B, restart the viewer, the
   show it: capture consecutive frames across a departure
   (`AURORA_FPS_LIMIT=60`, `AURORA_CAPTURE_FRAMES` listing every frame from
   about 23 s to 31 s after the arrival) and compare the lines' bottom frame
-  by frame.
+  by frame. The lines follow the chat bar: with
+  `AURORA_DEMO_TOOLBAR=chat-top`, `chat-left` or `chat-right` they hang
+  under the chat field, from its left, or ending on its right at the right
+  of the screen; in a short window (`AURORA_WINDOW_SIZE=1100,520`) the
+  oldest are cut under the top bar instead of leaving the screen.
 
 - **`AURORA_DEMO_MUTED_CHAT=aurora|compact|bubbles|legacy|lines[:hidden|collapsed|greyed]`**:
   the demo's blocked resident, Violet Wolf (on the demo block list), talks
