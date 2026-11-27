@@ -664,8 +664,7 @@ impl App {
                 ..Default::default()
             };
             if mode == "stuck-denied" {
-                self.settings.rlva_enabled = true;
-                self.world.rlva_configure(true);
+                self.rlva_demo_switch(true);
                 self.rlva_demo_message("@tploc=n,tplocal:0=n".into());
             }
             self.on_ctx_action(if matches!(mode.as_str(), "go" | "go-flight" | "go-flight-late") {

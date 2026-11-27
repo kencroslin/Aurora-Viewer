@@ -1152,7 +1152,7 @@ fn check_group_contacts_rendered_list(classic: bool, window: bool, admin: bool, 
                 if window {
                     st.show(ui.ctx(), &mut c, &env);
                 } else if classic {
-                    members::classic_list(&mut st, ui, &mut c, &v);
+                    members::classic_list(&mut st, ui, &mut c, &v, 380.0);
                 } else {
                     members::show(&mut st, ui, &mut c, &env, &v, &mut Vec::new());
                 }
